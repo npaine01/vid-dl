@@ -1,0 +1,13 @@
+# Downloaded media (if the fallback local downloads/ folder is ever used)
+downloads/
+
+# Python
+__pycache__/
+*.pyc
+
+# Logs
+server.log
+*.log
+
+# macOS
+.DS_Store
