@@ -37,6 +37,26 @@ plain download path stays as fast and dependency-light as it is today. No
 install nagging at startup; the launcher continues to install only `yt-dlp`,
 which is load-bearing.
 
+## Generality constraint
+
+**The program contains mechanisms, never content.** No domain vocabulary, no
+corpus-specific rules, no bundled correction data ships with it. Every feature
+must hold for an arbitrary video in an arbitrary language from an arbitrary
+source. Specific files are used to *validate* behaviour during development;
+they never become part of it.
+
+Concretely, this rules out:
+
+- Hardcoded proper nouns, names, or subject-matter word lists
+- Assuming English, or any language, anywhere in the repair path
+- Assuming YouTube as the source (the ASR detector gates on file *structure*,
+  which any rolling-caption producer generates)
+- Assuming captions are unpunctuated, or that ASR quality is uniform
+- Committing third-party caption files to the repository as fixtures
+
+`subs.py` additionally carries no macOS dependency and no external dependency,
+so it is usable as a standalone cross-platform tool independent of the app.
+
 ## Architecture
 
 Five Python modules. Still standard-library only, still double-click to run.
@@ -298,8 +318,11 @@ repair problems surface in about two seconds instead of after a full queue.
 
 Six shippable steps, each independently useful and testable:
 
-1. **`subs.py` + tests.** Pure text, no dependencies, immediately useful on the
-   files already on disk. Highest value, lowest risk.
+1. **`subs.py` + CLI + tests.** SRT/VTT parsing, rolling detection, repair,
+   glossary. Pure text, no dependencies, cross-platform, with a command-line
+   entry point so it stands alone as a general tool independent of the app.
+   Highest value, lowest risk, and settles the hardest correctness question
+   first.
 2. **Module split.** Move existing logic out of `server.py` into `ytdlp.py` /
    `media.py` / `jobs.py` with no behaviour change. Also fixes the
    `--sub-langs en.*` duplicate.
@@ -314,9 +337,14 @@ Steps 1--2 are safe on their own. The first user-visible change lands at 3.
 
 Standard-library `unittest`. No network, no encoding in tests.
 
-- `test_subs.py` -- detection gate and repair, using all five real `.srt` files
-  as fixtures. Asserts every post-condition above. Includes a human-authored
-  caption file to prove it is passed through untouched.
+- `test_subs.py` -- detection gate, repair, and glossary. Fixtures are
+  **synthetic**: a generator builds rolling-caption SRTs reproducing the
+  measured structure (bridge cues, three-fold line duplication, restart points
+  after pauses) at arbitrary sizes and in arbitrary scripts, including Chinese
+  and Japanese. Third-party caption files are not committed to the repository;
+  real files are used as local validation during development only. Also covers
+  a human-authored file passing through byte-identical, a VTT input, a file
+  with no bridge cues, an empty file, and a single-cue file.
 - `test_ytdlp.py` -- command building per mode/quality/subtitle combination;
   track parsing from captured `--dump-json` fixtures; playlist JSON to items.
 - `test_media.py` -- capability parsing from captured `-filters` output of both
@@ -347,10 +375,47 @@ student handout is worse than a visible gap because nobody will check it.
 The app repairs structure, which is deterministic and verifiable, and leaves
 wording alone.
 
-## Open question
+## Correction glossary
 
-A **correction glossary** -- a user-supplied list of find/replace pairs applied
-after repair, so `will are a warrior been along` becomes `Woollarawarre Bennelong`
-across every file in a series -- would be deterministic, testable, and fits the
-"correct against a source, do not guess" principle. It is not in the current
-scope. Flagged for a decision before implementation begins.
+ASR fails hardest on vocabulary outside general speech -- proper nouns, place
+names, technical and domain terms -- in any language. Repairing cue structure
+does not touch this. The glossary is the general mechanism for it: an
+**optional, user-supplied** list of literal substitutions applied after repair.
+
+It ships empty. The program never contains corrections of its own.
+
+**Format.** A plain UTF-8 text file, `wrong = right` per line, `#` for comments.
+Chosen over JSON so it is editable by someone who does not write code. Located
+by the user per download, or auto-detected as `glossary.txt` beside the output.
+
+**Matching.** Literal, longest-first, so a short entry cannot clobber part of a
+phrase a longer entry would have matched. Case-sensitive by default, since
+capitalisation is often the very thing being corrected.
+
+Word-boundary handling is script-aware rather than assumed: `\b` anchoring is
+applied only where the term's edges are word characters in a script that
+delimits words with spaces. Chinese, Japanese and Thai have no such boundaries,
+so those terms match as plain substrings. Getting this wrong would make the
+feature useless for exactly the languages this project has to support.
+
+**Reporting.** Substitution is never silent. Each run reports every replacement
+with its count, and -- more usefully -- flags **glossary entries that matched
+nothing**, which means the ASR spelled the term differently than the author
+assumed. That is a quality signal that is otherwise invisible.
+
+**What it is not.** Not spell-checking, not fuzzy matching, not inference. It
+applies exactly the substitutions it is given. Deciding what those should be
+requires checking against the source a video was scripted from, which is a
+judgement task and stays with the user.
+
+## Deferred to measurement
+
+Two defaults are guesses until there is output to look at, and the preview-burn
+feature exists to settle them:
+
+- **Encoder.** `h264_videotoolbox` vs `libx264 -crf 18` -- a real speed/quality
+  trade whose right answer depends on encode times that have not been measured.
+- **Font sizes.** 18 / 24 / 30 against libass's default 384x288 script
+  resolution. Plausible, unverified.
+
+Both are decided at step 5 with real numbers, not chosen on paper now.
