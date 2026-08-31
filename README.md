@@ -50,9 +50,63 @@ This repository does **not** include or redistribute yt-dlp itself. It is downlo
 7. Files are saved to `~/Downloads/YT` by default — click **"Open downloads folder"** to jump there.
 8. When you're done, close the Terminal window (or press `Ctrl+C` in it) to stop the app.
 
+## Repairing auto-generated captions
+
+YouTube's automatic captions imitate broadcast rolling captions. Downloaded as
+SRT, that scrolling is baked in as duplicated text: every line is written three
+times, and a subtitle you have already heard sits on screen over the audio of
+the next one. Roughly half of every such file is 10-millisecond scroll frames.
+
+`subs.py` repairs this. It works on its own, on any folder of subtitle files,
+independently of the rest of the app:
+
+```bash
+python3 subs.py                      # every .srt/.vtt in the current folder
+python3 subs.py clip.srt             # one file
+python3 subs.py --glossary terms.txt # also apply corrections
+```
+
+Repaired files are written alongside the originals with a `_CLEAN` suffix.
+Nothing is overwritten. Human-authored captions are detected and left alone —
+the check is structural, so it holds for any language.
+
+Speech recognition also mistranscribes proper nouns, place names and technical
+vocabulary, which repairing the format does not fix. The optional glossary
+applies literal corrections you supply:
+
+```
+# terms.txt — one substitution per line
+been along = Bennelong
+gagal = Gadigal
+```
+
+It reports how many times each entry matched, and warns about entries that
+matched nothing — which usually means the source spells the term differently
+than you assumed. It applies exactly what you give it and infers nothing;
+deciding the correct spellings is your job, ideally against whatever source
+the video was scripted from.
+
 ## How it works
 
-`server.py` is a small Python script (standard library only, no extra dependencies) that runs a local web server, wraps the `yt-dlp` command-line tool, and serves the front end in `index.html`. Everything runs locally on your machine — no data is sent anywhere except to YouTube itself to fetch the video you asked for.
+Standard library only, no dependencies beyond `yt-dlp` itself:
+
+| File | Role |
+|---|---|
+| `server.py` | Local web server: routing and static files |
+| `ytdlp.py` | yt-dlp command construction and output parsing |
+| `jobs.py` | Job state and download execution |
+| `media.py` | Locating a usable ffmpeg |
+| `subs.py` | Caption repair and correction glossary |
+| `index.html` / `style.css` / `app.js` | Front end |
+
+Everything runs locally on your machine — no data is sent anywhere except to
+YouTube itself to fetch the video you asked for.
+
+Run the tests with:
+
+```bash
+python3 -m unittest discover -s tests
+```
 
 ## License
 
