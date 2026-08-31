@@ -102,6 +102,11 @@ When `ffmpeg_burn` is `None`, burn options are disabled client-side **and**
 rejected server-side, with the message naming `brew install ffmpeg-full`. The
 hint appears inline next to the disabled control, not as a startup banner.
 
+Confirmed on the development machine: with both formulas installed, the slim
+`/opt/homebrew/bin/ffmpeg` reports no `subtitles` filter while
+`/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg` does, and `media.find_ffmpeg()`
+selects the latter.
+
 ## Caption repair (`subs.py`)
 
 ### The problem
@@ -258,9 +263,25 @@ titles are full of those. Rather than escaping defensively, the job copies the
 repaired `.srt` into a temp directory under a safe ASCII name and runs there.
 This removes the entire class of bug.
 
-**Encoder.** Hardware `h264_videotoolbox` when available (roughly 5--10x faster
-than `libx264`, which matters across a queue), falling back to `libx264 -crf 18`.
-No user-facing knobs, per scope. Audio is copied, never re-encoded.
+**Encoder: `libx264 -crf 18 -preset medium`.** Measured, not assumed. Burning
+30 s of 1080p30 on this machine:
+
+| Encoder | Time | Output |
+|---|---|---|
+| `h264_videotoolbox -q:v 60` | 3.3 s | 26.0 MB |
+| `libx264 -crf 18 -preset medium` | 4.2 s | 35.3 MB |
+
+An earlier draft of this spec claimed hardware encoding was 5--10x faster. It is
+not: the measured gap is about 1.3x, and the sizes are not comparable because
+CRF 18 targets a higher quality than `-q:v 60` reaches. A 27% time cost buys a
+true quality target, predictable output, and no dependency on Apple hardware --
+so libx264 is the default. `h264_videotoolbox` stays available for long queues.
+
+Caveat on the measurement: the test clip was `testsrc2`, which is
+high-entropy synthetic content and harder to encode than real video. The
+ranking is expected to hold; the absolute times are pessimistic.
+
+Audio is copied, never re-encoded.
 
 **Soft-subs** use `-c copy -c:s mov_text` -- instant, no re-encode.
 
@@ -285,9 +306,15 @@ requested. `fc-match` always returns *something* (LastResort), so the returned
 family name must be compared, not just the exit code. A mismatch fails the job
 immediately rather than after producing 40 minutes of tofu boxes.
 
-Sizes Small/Medium/Large map to ASS `FontSize` values relative to libass's
-default 384x288 script resolution. Initial values 18 / 24 / 30, **to be
-confirmed against the preview during implementation** rather than assumed.
+Sizes Small/Medium/Large map to ASS `FontSize` **18 / 24 / 30**, confirmed by
+rendering each against a 1920x1080 frame. At 1080p, 24 fits a 43-character line
+on one row; 30 wraps such a line to two rows, which is acceptable for
+subtitles but worth knowing, since repaired ASR cues run 35--45 characters.
+
+CJK rendering is verified end to end, not merely assumed from font resolution:
+Japanese (Hiragino Sans) and Chinese (PingFang SC) both burn as real glyphs
+with correct outlines. A font that resolves can still render tofu, so this was
+checked against actual output frames.
 
 ## Standalone burn tool
 
