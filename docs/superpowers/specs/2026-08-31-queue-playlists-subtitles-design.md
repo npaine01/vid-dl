@@ -140,6 +140,26 @@ is_rolling(cues):
 Human-authored captions score far below both thresholds and are passed through
 byte-identical. Only files that pass this gate are modified.
 
+### Parsing (the actual hazard)
+
+Rolling captions carry **two line slots**, and an empty top slot appears as a
+literal blank line *inside* the cue:
+
+```
+1
+00:00:01,760 --> 00:00:04,350
+                                          <- empty top slot
+Who really was Woollarawarre Bennelong?
+```
+
+A parser that splits blocks on blank lines tears this cue in half and silently
+discards its text -- and it is exactly the cue that carries the opening line of
+each stretch of speech. `subs.py` therefore locates cues by **scanning for
+timing lines**, never by splitting on blank lines. A trailing all-digits line
+before the next timing line is the next cue's number and is dropped.
+
+This is the single highest-risk detail in the module and has dedicated tests.
+
 ### Repair
 
 ```
@@ -149,41 +169,37 @@ clean_rolling(cues):
     seq, prev = [], None
     for i, cue in enumerate(cues):
         if not cue.lines: continue
-        newest = cue.lines[-1]              # rule 1: last line is the new speech
+        newest = cue.lines[-1]              # rule 1: last slot is the new speech
         if newest == prev: continue         # rule 2: skip scroll frames
-        # leading-edge fix: a line first appearing in a bridge cue inherits
-        # the preceding cue's start, not the bridge's 10ms window
-        start = cues[i-1].start if (cue.end - cue.start) <= BRIDGE_MS and i > 0 else cue.start
-        seq.append((newest, start)); prev = newest
+        seq.append((newest, cue.start)); prev = newest
 
     out = []
     for i, (line, start) in enumerate(seq):
-        end = seq[i+1][1] - 1 if i+1 < len(seq) else cues[-1].end     # rule 3: tile
-        out.append(Cue(start, max(end, start + MIN_CUE_MS), line))
+        end = seq[i+1][1] if i+1 < len(seq) else cues[-1].end         # rule 3: tile
+        out.append(Cue(start, end, line))   # never dropped, however short
     return out
 ```
 
-**The leading-edge fix is load-bearing and was found by testing.** Normally a
-line is emitted from the long cue where it is the bottom line, and its bridge
-arrives afterwards and is correctly skipped as a repeat. At the start of the
-file -- and again after any speech pause where the caption display clears --
-that order inverts: the line appears in its bridge *first*, is emitted with a
-10 ms start, and rule 3 then gives it a 10 ms window that the `MIN_CUE_MS`
-guard silently discards.
+These three rules are correct as written and need no special case, **provided
+parsing is correct**. Given a correct parse, the opening line arrives in a
+normal long cue carrying its true start time, and every bridge repeat is caught
+by rule 2.
 
-Without the fix, one line is lost per restart point: 1 line on each Bennelong
-episode, 6 on the longer unrelated file. The lost lines are the openings of
-each stretch of speech -- the worst ones to lose in a listening text.
+An earlier draft of this spec claimed rule 2 loses the opening line of each
+file. That was wrong -- it was an artefact of a blank-line-splitting parser in
+the draft implementation, not a flaw in the rules. Measured cue counts follow
+`2n-1` exactly for n unique lines across all five validation files
+(29/15, 137/69, 111/56, 139/70, 959/480), which confirms no line is lost and
+no restart points occur.
 
 ### Post-conditions (asserted in tests)
 
-- **No unique input line missing from the output.** This is the primary
-  invariant. A line whose tiled window falls under `MIN_CUE_MS` is *extended*
-  to that floor rather than discarded, and the job log records it. Nothing is
-  ever dropped silently -- the original script's `>= 400` filter is what hid
-  the leading-edge bug in the first place.
+- **No unique input line missing from the output.** The primary invariant.
+  Cues are never discarded for being short; a window below `MIN_CUE_MS` is
+  kept and surfaced by `short_cues()` instead. Dropping short residue is how
+  a repair silently loses text.
 - No overlapping cues
-- No cue shorter than `MIN_CUE_MS`
+- Short cues reported, not removed
 - Output cue count between 40% and 60% of input
 - Mean cue duration between 1.5 s and 5.0 s (real files measure 2.46--2.78 s)
 
