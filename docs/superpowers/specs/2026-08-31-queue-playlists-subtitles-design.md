@@ -138,8 +138,8 @@ clean_rolling(cues):
 
     out = []
     for i, (line, start) in enumerate(seq):
-        end = seq[i+1].start - 1 if i+1 < len(seq) else cues[-1].end   # rule 3: tile
-        if end - start >= MIN_CUE_MS: out.append(Cue(start, end, line))
+        end = seq[i+1][1] - 1 if i+1 < len(seq) else cues[-1].end     # rule 3: tile
+        out.append(Cue(start, max(end, start + MIN_CUE_MS), line))
     return out
 ```
 
@@ -157,7 +157,11 @@ each stretch of speech -- the worst ones to lose in a listening text.
 
 ### Post-conditions (asserted in tests)
 
-- No unique input line missing from the output
+- **No unique input line missing from the output.** This is the primary
+  invariant. A line whose tiled window falls under `MIN_CUE_MS` is *extended*
+  to that floor rather than discarded, and the job log records it. Nothing is
+  ever dropped silently -- the original script's `>= 400` filter is what hid
+  the leading-edge bug in the first place.
 - No overlapping cues
 - No cue shorter than `MIN_CUE_MS`
 - Output cue count between 40% and 60% of input
@@ -289,6 +293,22 @@ repair problems surface in about two seconds instead of after a full queue.
 - ffmpeg non-zero exit: job errors with the last 20 lines of stderr.
 - Playlist URL that is really a single video: treated as a single video.
 - One failed item never stalls the queue.
+
+## Build order
+
+Six shippable steps, each independently useful and testable:
+
+1. **`subs.py` + tests.** Pure text, no dependencies, immediately useful on the
+   files already on disk. Highest value, lowest risk.
+2. **Module split.** Move existing logic out of `server.py` into `ytdlp.py` /
+   `media.py` / `jobs.py` with no behaviour change. Also fixes the
+   `--sub-langs en.*` duplicate.
+3. **Queue + stop.** Serial worker, multi-item UI, stop-after-current.
+4. **Playlist expansion + probing.** Checkbox list, deferred per-item probe.
+5. **Burning.** ffmpeg detection, font mapping, preview, soft-subs.
+6. **Standalone burn tool.** Folder listing and Finder picker.
+
+Steps 1--2 are safe on their own. The first user-visible change lands at 3.
 
 ## Testing
 
