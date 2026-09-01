@@ -246,7 +246,8 @@ class JobQueue:
 def run_burn(job, ffmpeg, video, subtitle, output, language=None,
              size="medium", encoder=media.DEFAULT_ENCODER, duration_ms=None,
              glossary=(), preview_seconds=None, preview_start=None,
-             spawn=_spawn, font_available=media.font_available):
+             audio_codec=None, spawn=_spawn,
+             font_available=media.font_available):
     """Render `subtitle` into `video`, writing `output`.
 
     The subtitle is repaired and copied into a temporary directory under a
@@ -275,7 +276,8 @@ def run_burn(job, ffmpeg, video, subtitle, output, language=None,
         command = media.burn_command(
             ffmpeg=ffmpeg, video=video, subtitle=STAGED_SUBTITLE, output=output,
             font=font, size=media.font_size(size), encoder=encoder,
-            preview_seconds=preview_seconds, preview_start=preview_start)
+            preview_seconds=preview_seconds, preview_start=preview_start,
+            audio_codec=audio_codec)
 
         process = spawn(command, cwd=workspace)
         job.process = process
@@ -313,14 +315,15 @@ def run_burn(job, ffmpeg, video, subtitle, output, language=None,
         shutil.rmtree(workspace, ignore_errors=True)
 
 
-def run_mux(job, ffmpeg, video, subtitle, output, language=None, spawn=_spawn):
+def run_mux(job, ffmpeg, video, subtitle, output, language=None,
+            audio_codec=None, spawn=_spawn):
     """Embed `subtitle` as a switchable track. No re-encode, so near-instant."""
     job.status = "running"
     job.stage = "embedding"
     try:
         process = spawn(media.mux_command(
             ffmpeg=ffmpeg, video=video, subtitle=subtitle,
-            output=output, language=language))
+            output=output, language=language, audio_codec=audio_codec))
         job.process = process
         for line in process.stdout:
             line = line.rstrip("\n")

@@ -222,3 +222,50 @@ class TestBatchEnqueue(unittest.TestCase):
         created = server.enqueue_many({
             "items": [{"title": "no url"}, {"url": "https://example.com/b"}]})
         self.assertEqual(len(created), 1)
+
+
+class TestDuplicateHandling(unittest.TestCase):
+    def setUp(self):
+        server.QUEUE = server.jobs.JobQueue(
+            runner=lambda job: setattr(job, "status", "done")).start()
+
+    def test_refuses_a_url_already_waiting_in_the_queue(self):
+        server.QUEUE.add(server.jobs.Job(url="https://example.com/a"))
+        with self.assertRaises(ValueError) as caught:
+            server.enqueue({"url": "https://example.com/a"})
+        self.assertIn("already", str(caught.exception).lower())
+
+    def test_allows_requeueing_something_that_finished(self):
+        """Re-downloading on purpose is legitimate; only pending work clashes."""
+        job = server.QUEUE.add(server.jobs.Job(url="https://example.com/a"))
+        self.assertTrue(server.QUEUE.wait_idle())
+        self.assertEqual(job.status, "done")
+        self.assertTrue(server.enqueue({"url": "https://example.com/a"}))
+
+    def test_skips_duplicates_within_one_batch_without_failing_it(self):
+        created = server.enqueue_many({"items": [
+            {"url": "https://example.com/a", "title": "A"},
+            {"url": "https://example.com/a", "title": "A again"},
+            {"url": "https://example.com/b", "title": "B"},
+        ]})
+        self.assertEqual([job.url for job in created],
+                         ["https://example.com/a", "https://example.com/b"])
+
+
+class TestOutputCollision(unittest.TestCase):
+    def test_does_not_overwrite_an_existing_burned_file(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as folder:
+            first = Path(folder, "Clip [subbed].mp4")
+            first.write_bytes(b"already burned")
+            second = server.burned_path(str(Path(folder, "Clip.mp4")))
+            self.assertNotEqual(second, str(first))
+            self.assertIn("subbed", second)
+
+    def test_uses_the_plain_name_when_nothing_is_there(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as folder:
+            self.assertEqual(server.burned_path(str(Path(folder, "Clip.mp4"))),
+                             str(Path(folder, "Clip [subbed].mp4")))

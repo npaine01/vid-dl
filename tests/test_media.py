@@ -265,3 +265,50 @@ class TestEncodeProgress(unittest.TestCase):
     def test_ignores_progress_when_the_duration_is_unknown(self):
         self.assertEqual(
             media.parse_encode_progress("out_time=00:00:30.000000", None), {})
+
+
+class TestAudioCompatibility(unittest.TestCase):
+    """MP4 can carry Opus, but QuickTime cannot play it and VLC often will
+    not either. Copying YouTube's Opus into a burned MP4 produces a file the
+    user cannot open."""
+
+    def test_copies_audio_that_mp4_players_understand(self):
+        for codec in ("aac", "mp3"):
+            with self.subTest(codec=codec):
+                command = media.burn_command(
+                    ffmpeg="/x/ffmpeg", video="/in/a.mp4", subtitle="s.srt",
+                    output="/out/a.mp4", audio_codec=codec)
+                self.assertEqual(command[command.index("-c:a") + 1], "copy")
+
+    def test_re_encodes_opus_to_aac(self):
+        command = media.burn_command(
+            ffmpeg="/x/ffmpeg", video="/in/a.mp4", subtitle="s.srt",
+            output="/out/a.mp4", audio_codec="opus")
+        self.assertEqual(command[command.index("-c:a") + 1], "aac")
+
+    def test_re_encodes_vorbis_too(self):
+        command = media.burn_command(
+            ffmpeg="/x/ffmpeg", video="/in/a.mp4", subtitle="s.srt",
+            output="/out/a.mp4", audio_codec="vorbis")
+        self.assertEqual(command[command.index("-c:a") + 1], "aac")
+
+    def test_copies_when_the_codec_is_unknown(self):
+        """Never re-encode on a guess; only on a codec known to be a problem."""
+        command = media.burn_command(
+            ffmpeg="/x/ffmpeg", video="/in/a.mp4", subtitle="s.srt",
+            output="/out/a.mp4", audio_codec=None)
+        self.assertEqual(command[command.index("-c:a") + 1], "copy")
+
+
+class TestProbeAudioCodec(unittest.TestCase):
+    def test_reads_the_audio_codec_name(self):
+        self.assertEqual(
+            media.probe_audio_codec("/x/ffprobe", "/in/a.mp4",
+                                    run=lambda command: "opus\n"),
+            "opus")
+
+    def test_returns_none_when_it_cannot_tell(self):
+        def explode(command):
+            raise OSError("no ffprobe")
+        self.assertIsNone(
+            media.probe_audio_codec("/x/ffprobe", "/in/a.mp4", run=explode))

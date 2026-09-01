@@ -153,9 +153,34 @@ ISO3 = {"en": "eng", "ja": "jpn", "zh": "chi", "ko": "kor", "it": "ita",
         "es": "spa", "fr": "fra", "de": "deu", "pt": "por", "ru": "rus"}
 
 
+# Audio codecs MP4 can technically hold but common players cannot decode.
+# QuickTime refuses Opus outright; VLC's MP4 demuxer often does too.
+INCOMPATIBLE_AUDIO = ("opus", "vorbis")
+
+
+def audio_arguments(codec):
+    """Copy the audio unless it is a codec MP4 players choke on."""
+    if codec and codec.lower() in INCOMPATIBLE_AUDIO:
+        return ["-c:a", "aac", "-b:a", "192k"]
+    return ["-c:a", "copy"]
+
+
+def probe_audio_codec(ffprobe, path, run=None):
+    """The audio codec of `path`, or None if it cannot be determined."""
+    command = [ffprobe, "-v", "error", "-select_streams", "a:0",
+               "-show_entries", "stream=codec_name",
+               "-of", "default=nw=1:nk=1", path]
+    try:
+        output = run(command) if run else subprocess.run(
+            command, capture_output=True, text=True, timeout=30).stdout
+        return (output or "").strip().splitlines()[0].strip() or None
+    except (OSError, subprocess.SubprocessError, IndexError, AttributeError):
+        return None
+
+
 def burn_command(ffmpeg, video, subtitle, output, font=LATIN_FONT,
                  size=SIZES["medium"], encoder=DEFAULT_ENCODER,
-                 preview_seconds=None, preview_start=None):
+                 preview_seconds=None, preview_start=None, audio_codec=None):
     """Render `subtitle` permanently into `video`.
 
     `subtitle` must be a bare filename, with ffmpeg run from the directory
@@ -175,19 +200,22 @@ def burn_command(ffmpeg, video, subtitle, output, font=LATIN_FONT,
     style = f"FontName={font},FontSize={size},Outline=2,Shadow=0"
     command += ["-vf", f"subtitles={subtitle}:force_style='{style}'"]
     command += ENCODERS.get(encoder, ENCODERS[DEFAULT_ENCODER])
-    command += ["-c:a", "copy", "-movflags", "+faststart",
-                "-progress", "pipe:1", "-nostats", output]
+    command += audio_arguments(audio_codec)
+    command += ["-movflags", "+faststart", "-progress", "pipe:1", "-nostats",
+                output]
     return command
 
 
-def mux_command(ffmpeg, video, subtitle, output, language=None):
-    """Embed `subtitle` as a switchable track. No re-encoding, so near-instant."""
+def mux_command(ffmpeg, video, subtitle, output, language=None,
+                audio_codec=None):
+    """Embed `subtitle` as a switchable track. No video re-encoding."""
     code = ISO3.get((language or "").lower().split("-")[0], "und")
-    return [ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
-            "-i", video, "-i", subtitle,
-            "-c", "copy", "-c:s", "mov_text",
-            "-metadata:s:s:0", f"language={code}",
-            "-movflags", "+faststart", output]
+    command = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+               "-i", video, "-i", subtitle, "-c", "copy", "-c:s", "mov_text"]
+    command += audio_arguments(audio_codec)
+    command += ["-metadata:s:s:0", f"language={code}",
+                "-movflags", "+faststart", output]
+    return command
 
 
 def parse_encode_progress(line, duration_ms):

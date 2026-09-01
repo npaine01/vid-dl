@@ -36,9 +36,12 @@ def video_format(quality, ffmpeg):
     cap = None if quality == "best" else quality
     if not ffmpeg:
         return f"best[height<={cap}]/b" if cap else "b"
+    # Prefer m4a (AAC) audio: yt-dlp's plain `bestaudio` picks Opus on
+    # YouTube, and QuickTime cannot play Opus in an MP4 at all.
     if cap:
-        return f"bestvideo[height<={cap}]+bestaudio/best[height<={cap}]"
-    return "bv*+ba/b"
+        return (f"bestvideo[height<={cap}]+bestaudio[ext=m4a]/"
+                f"bestvideo[height<={cap}]+bestaudio/best[height<={cap}]")
+    return "bv*+ba[ext=m4a]/bv*+ba/b"
 
 
 def build_download_command(url, output_dir, mode="video",

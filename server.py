@@ -42,9 +42,20 @@ NEEDS_FFMPEG_FULL = (
 
 
 def burned_path(video):
-    """Where the burned copy goes: beside the original, clearly marked."""
+    """Where the burned copy goes: beside the original, clearly marked.
+
+    Never overwrites: burning the same video twice with different settings is
+    a reasonable thing to do, and silently replacing the earlier result would
+    destroy work that may have taken minutes to produce.
+    """
     stem, extension = os.path.splitext(video)
-    return f"{stem} [subbed]{extension or '.mp4'}"
+    extension = extension or ".mp4"
+    candidate = f"{stem} [subbed]{extension}"
+    counter = 2
+    while os.path.exists(candidate):
+        candidate = f"{stem} [subbed {counter}]{extension}"
+        counter += 1
+    return candidate
 
 
 def subtitle_beside(video, language):
@@ -78,13 +89,18 @@ def _run(job):
     except OSError as error:
         job.note(f"(could not repair captions: {error})")
 
+    # YouTube's best audio is Opus, which MP4 can hold but QuickTime cannot
+    # play. Detect it so the encode can convert rather than copy it through.
+    audio_codec = media.probe_audio_codec(FFPROBE, video)
+
     if job.sub_mode == "soft":
         jobs.run_mux(job, ffmpeg=FFMPEG, video=video, subtitle=subtitle,
-                     output=burned_path(video), language=job.sub_lang)
+                     output=burned_path(video), language=job.sub_lang,
+                     audio_codec=audio_codec)
     elif job.sub_mode == "burn":
         jobs.run_burn(job, ffmpeg=FFMPEG, video=video, subtitle=subtitle,
                       output=burned_path(video), language=job.sub_lang,
-                      size=job.sub_size,
+                      size=job.sub_size, audio_codec=audio_codec,
                       duration_ms=media.probe_duration(FFPROBE, video))
 
 
@@ -162,10 +178,19 @@ def prepare_download(payload, ffmpeg=None, output_dir=None, can_burn=None):
     return job, command
 
 
+def pending_urls():
+    """URLs already waiting or in progress."""
+    return {job.url for job in QUEUE.jobs.values()
+            if job.status in ("queued", "running")}
+
+
 def enqueue(payload):
     """Validate a download request and add it to the queue."""
-    if not (payload.get("url") or "").strip():
+    url = (payload.get("url") or "").strip()
+    if not url:
         raise ValueError("Missing URL")
+    if url in pending_urls():
+        raise ValueError("That video is already in the queue.")
 
     job, command = prepare_download(payload, ffmpeg=FFMPEG)
     job.command = command
@@ -189,9 +214,17 @@ def enqueue_many(payload):
 
     created = []
     for item in items:
-        job = enqueue({**shared, "url": item["url"]})
+        try:
+            job = enqueue({**shared, "url": item["url"]})
+        except ValueError:
+            # A repeat within the batch, or already queued. Skip it quietly
+            # rather than failing the whole selection -- playlists really do
+            # list the same video twice.
+            continue
         job.title = item.get("title") or job.title
         created.append(job)
+    if not created:
+        raise ValueError("Everything selected is already in the queue.")
     return created
 
 

@@ -29,11 +29,13 @@ class TestDownloadCommand(unittest.TestCase):
 
     def test_caps_video_height_at_the_requested_quality(self):
         command = self.build(quality="720", ffmpeg=FFMPEG)
-        self.assertIn("bestvideo[height<=720]+bestaudio/best[height<=720]",
+        self.assertIn("bestvideo[height<=720]+bestaudio[ext=m4a]/"
+                      "bestvideo[height<=720]+bestaudio/best[height<=720]",
                       command)
 
     def test_does_not_cap_height_when_asked_for_best(self):
-        self.assertIn("bv*+ba/b", self.build(quality="best", ffmpeg=FFMPEG))
+        self.assertIn("bv*+ba[ext=m4a]/bv*+ba/b",
+                      self.build(quality="best", ffmpeg=FFMPEG))
 
     def test_falls_back_to_premerged_formats_without_ffmpeg(self):
         self.assertIn("best[height<=1080]/b",
@@ -41,8 +43,10 @@ class TestDownloadCommand(unittest.TestCase):
 
     def test_rejects_an_unknown_quality_and_uses_the_default(self):
         command = self.build(quality="9000", ffmpeg=FFMPEG)
-        self.assertIn(f"bestvideo[height<={ytdlp.DEFAULT_QUALITY}]"
-                      f"+bestaudio/best[height<={ytdlp.DEFAULT_QUALITY}]", command)
+        cap = ytdlp.DEFAULT_QUALITY
+        self.assertIn(f"bestvideo[height<={cap}]+bestaudio[ext=m4a]/"
+                      f"bestvideo[height<={cap}]+bestaudio/best[height<={cap}]",
+                      command)
 
     def test_extracts_mp3_in_audio_mode(self):
         command = self.build(mode="audio")
@@ -345,3 +349,23 @@ class TestIdentifyingTheSourceLanguage(unittest.TestCase):
         tracks = {t["code"]: t for t in ytdlp.parse_subtitle_tracks(info)}
         self.assertEqual(tracks["zh-Hans"]["kind"], "original")
         self.assertEqual(tracks["zh-Hant"]["kind"], "translated")
+
+
+class TestAudioFormatPreference(unittest.TestCase):
+    """MP4 output should carry AAC. yt-dlp's plain `bestaudio` picks Opus on
+    YouTube, which QuickTime cannot play at all."""
+
+    def test_prefers_m4a_audio_for_mp4_output(self):
+        self.assertIn("[ext=m4a]", ytdlp.video_format("1080", ffmpeg=True))
+
+    def test_still_falls_back_to_any_audio(self):
+        """A video with no m4a stream must still download, just with Opus."""
+        fmt = ytdlp.video_format("1080", ffmpeg=True)
+        self.assertIn("+bestaudio/", fmt)
+
+    def test_applies_to_best_quality_too(self):
+        self.assertIn("[ext=m4a]", ytdlp.video_format("best", ffmpeg=True))
+
+    def test_unchanged_without_ffmpeg(self):
+        """Without ffmpeg nothing is merged, so there is no audio to choose."""
+        self.assertNotIn("m4a", ytdlp.video_format("1080", ffmpeg=False))
