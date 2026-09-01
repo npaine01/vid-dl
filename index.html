@@ -8,8 +8,8 @@
 </head>
 <body>
   <div class="card">
-    <h1><span class="dot"></span>YouTube Downloader</h1>
-    <p class="sub">Paste a link, pick a format, hit download. Powered by yt-dlp, running locally on your machine.</p>
+    <h1><span class="dot"></span>vid-dl</h1>
+    <p class="sub">Paste a link, pick a format, add it to the queue. Powered by yt-dlp, running locally on your machine.</p>
 
     <label for="url">Video URL</label>
     <input type="text" id="url" placeholder="https://www.youtube.com/watch?v=..." autofocus>
@@ -34,21 +34,16 @@
       <label for="subs">Download English subtitles (.srt) if available</label>
     </div>
 
-    <button class="go" id="goBtn">Download</button>
+    <button class="go" id="goBtn">Add to queue</button>
 
     <div class="warn" id="ffmpegWarn"></div>
 
-    <div class="status-block" id="statusBlock" style="display:none;">
-      <div class="progress-outer"><div class="progress-inner" id="progressInner"></div></div>
-      <div class="status-line">
-        <span class="state" id="stateText">Starting…</span>
-        <span id="percentText">0%</span>
+    <div class="queue-block" id="queueBlock" style="display:none;">
+      <div class="queue-head">
+        <span class="queue-title">Queue <span class="queue-count" id="queueCount"></span></span>
+        <button class="stop-btn" id="stopBtn">Stop after current</button>
       </div>
-      <div class="size-text" id="sizeText"></div>
-      <details>
-        <summary>Show log</summary>
-        <pre class="log" id="logBox"></pre>
-      </details>
+      <div id="queueList"></div>
     </div>
 
     <div class="footer">
@@ -56,7 +51,6 @@
       <a id="openFolder">Open downloads folder</a>
     </div>
   </div>
-
 <script src="/app.js"></script>
 </body>
 </html>

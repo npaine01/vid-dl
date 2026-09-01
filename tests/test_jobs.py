@@ -89,3 +89,67 @@ class TestRunDownload(unittest.TestCase):
         jobs.run_download(job, ["yt-dlp"], spawn=must_not_run, ffmpeg=False)
         self.assertEqual(job.status, "error")
         self.assertIn("ffmpeg", job.error)
+
+
+class TestCancellationDuringDownload(unittest.TestCase):
+    def test_exposes_the_process_while_running_so_it_can_be_terminated(self):
+        job = jobs.Job(url="x")
+        process = FakeProcess(["[download] 10%", "[download] 20%"])
+        lines, seen = process.stdout, []
+
+        def watched():
+            for line in lines:
+                seen.append(job.process)
+                yield line
+
+        process.stdout = watched()
+        jobs.run_download(job, ["yt-dlp"], spawn=lambda command: process)
+        self.assertIs(seen[0], process)
+
+    def test_releases_the_process_handle_once_finished(self):
+        job = jobs.Job(url="x")
+        jobs.run_download(job, ["yt-dlp"], spawn=spawning(["[download] 10%"]))
+        self.assertIsNone(job.process)
+
+    def test_reports_a_cancelled_job_as_cancelled_not_failed(self):
+        """Terminating yt-dlp makes it exit non-zero, which must not be
+        presented to the user as an error they need to investigate."""
+        job = jobs.Job(url="x")
+        job.cancelled = True
+        jobs.run_download(job, ["yt-dlp"],
+                          spawn=spawning(["[download] 10%"], returncode=-15))
+        self.assertEqual(job.status, "cancelled")
+        self.assertIsNone(job.error)
+
+    def test_still_reports_a_genuine_failure_as_an_error(self):
+        job = jobs.Job(url="x")
+        jobs.run_download(job, ["yt-dlp"],
+                          spawn=spawning(["ERROR: nope"], returncode=1))
+        self.assertEqual(job.status, "error")
+
+
+class TestFilenameSelection(unittest.TestCase):
+    def test_the_merged_name_wins_over_earlier_fragments(self):
+        job = jobs.Job(url="x")
+        jobs.run_download(job, ["yt-dlp"], spawn=spawning([
+            "[download] Destination: /tmp/Clip.en.vtt",
+            "[download] Destination: /tmp/Clip.f399.mp4",
+            "[download] Destination: /tmp/Clip.f251.webm",
+            '[Merger] Merging formats into "/tmp/Clip.mp4"',
+        ]))
+        self.assertEqual(job.filename, "Clip.mp4")
+
+    def test_a_later_fragment_does_not_replace_the_final_name(self):
+        job = jobs.Job(url="x")
+        jobs.run_download(job, ["yt-dlp"], spawn=spawning([
+            '[Merger] Merging formats into "/tmp/Clip.mp4"',
+            "[download] Destination: /tmp/Clip.f251.webm",
+        ]))
+        self.assertEqual(job.filename, "Clip.mp4")
+
+    def test_falls_back_to_a_fragment_when_nothing_merged(self):
+        job = jobs.Job(url="x")
+        jobs.run_download(job, ["yt-dlp"], spawn=spawning([
+            "[download] Destination: /tmp/Clip.f399.mp4",
+        ]))
+        self.assertEqual(job.filename, "Clip.f399.mp4")

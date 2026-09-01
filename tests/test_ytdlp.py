@@ -109,3 +109,49 @@ class TestProgressParsing(unittest.TestCase):
 
     def test_returns_nothing_for_an_unrelated_line(self):
         self.assertEqual(ytdlp.parse_progress("[info] Downloading 1 format(s)"), {})
+
+
+class TestFilenameReporting(unittest.TestCase):
+    """yt-dlp announces several destinations per download: subtitle sidecars,
+    per-format fragments, then the merged result. Only the last is the file
+    the user actually asked for."""
+
+    def test_ignores_subtitle_sidecar_destinations(self):
+        line = "[download] Destination: /tmp/out/Clip.en.vtt"
+        self.assertNotIn("filename", ytdlp.parse_progress(line))
+
+    def test_ignores_srt_sidecars_too(self):
+        line = "[download] Destination: /tmp/out/Clip.ja.srt"
+        self.assertNotIn("filename", ytdlp.parse_progress(line))
+
+    def test_reports_a_format_fragment_only_as_provisional(self):
+        line = "[download] Destination: /tmp/out/Clip.f399.mp4"
+        update = ytdlp.parse_progress(line)
+        self.assertEqual(update["filename"], "Clip.f399.mp4")
+        self.assertFalse(update["final"])
+
+    def test_treats_the_merged_output_as_final(self):
+        line = '[Merger] Merging formats into "/tmp/out/Clip.mp4"'
+        update = ytdlp.parse_progress(line)
+        self.assertEqual(update["filename"], "Clip.mp4")
+        self.assertTrue(update["final"])
+
+    def test_treats_extracted_audio_as_final(self):
+        line = "[ExtractAudio] Destination: /tmp/out/Clip.mp3"
+        update = ytdlp.parse_progress(line)
+        self.assertEqual(update["filename"], "Clip.mp3")
+        self.assertTrue(update["final"])
+
+
+class TestAlreadyDownloaded(unittest.TestCase):
+    def test_reports_the_name_of_a_file_already_on_disk(self):
+        """yt-dlp prints no Destination line when the file already exists, so
+        without this the job finishes with no filename at all."""
+        line = "[download] /tmp/out/Clip.mp4 has already been downloaded"
+        update = ytdlp.parse_progress(line)
+        self.assertEqual(update["filename"], "Clip.mp4")
+        self.assertTrue(update["final"])
+
+    def test_ignores_an_already_downloaded_subtitle(self):
+        line = "[download] /tmp/out/Clip.en.vtt has already been downloaded"
+        self.assertNotIn("filename", ytdlp.parse_progress(line))

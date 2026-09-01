@@ -13,8 +13,14 @@ VALID_QUALITIES = ("best", "2160", "1440", "1080", "720", "480")
 PERCENT_RE = re.compile(r"\[download\]\s+([\d.]+)%")
 SIZE_RE = re.compile(
     r"\[download\]\s+[\d.]+%\s+of\s+~?\s*([\d.]+\s?\S+?)(?:\s+at\s|\s+in\s|\s*$)")
-DEST_RE = re.compile(
-    r"(?:Destination|Merging formats into):?\s*\"?([^\"\n]+?)\"?$")
+DEST_RE = re.compile(r"Destination:\s*\"?([^\"\n]+?)\"?$")
+MERGE_RE = re.compile(r"Merging formats into\s*\"?([^\"\n]+?)\"?$")
+EXISTING_RE = re.compile(r"\[download\]\s+(.+?) has already been downloaded")
+
+# Sidecars, not the media file the user asked for.
+SUBTITLE_SUFFIXES = (".vtt", ".srt", ".ass", ".ssa", ".lrc", ".ttml", ".json3")
+# Announced by post-processors, so the name is the finished article.
+FINAL_MARKERS = ("[Merger]", "[ExtractAudio]", "[VideoConvertor]")
 
 
 def video_format(quality, ffmpeg):
@@ -73,7 +79,24 @@ def parse_progress(line):
     size = SIZE_RE.search(line)
     if size:
         update["size"] = size.group(1).strip()
+    merged = MERGE_RE.search(line)
+    if merged:
+        update["filename"] = os.path.basename(merged.group(1))
+        update["final"] = True
+        return update
+
+    existing = EXISTING_RE.search(line)
+    if existing:
+        name = os.path.basename(existing.group(1))
+        if not name.lower().endswith(SUBTITLE_SUFFIXES):
+            update["filename"] = name
+            update["final"] = True
+        return update
+
     destination = DEST_RE.search(line)
     if destination:
-        update["filename"] = os.path.basename(destination.group(1))
+        name = os.path.basename(destination.group(1))
+        if not name.lower().endswith(SUBTITLE_SUFFIXES):
+            update["filename"] = name
+            update["final"] = line.startswith(FINAL_MARKERS)
     return update

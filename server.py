@@ -28,8 +28,12 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 FFMPEG = media.find_ffmpeg()
 
-JOBS = {}
-JOBS_LOCK = threading.Lock()
+def _run(job):
+    """Queue worker body: build nothing, just run what was prepared."""
+    jobs.run_download(job, job.command, ffmpeg=bool(FFMPEG))
+
+
+QUEUE = jobs.JobQueue(runner=_run).start()
 
 STATIC = {
     "/": ("index.html", "text/html; charset=utf-8"),
@@ -63,23 +67,26 @@ def prepare_download(payload, ffmpeg=None, output_dir=None):
     return job, command
 
 
-def start_job(payload):
-    """Validate a download request and start it. Returns the new job."""
+def enqueue(payload):
+    """Validate a download request and add it to the queue."""
+    if not (payload.get("url") or "").strip():
+        raise ValueError("Missing URL")
+
     job, command = prepare_download(payload, ffmpeg=FFMPEG)
+    job.command = command
 
     if job.sub_lang and not FFMPEG:
-        job.note("(ffmpeg not found - subtitles will be saved as .vtt instead "
+        job.note("(no working ffmpeg - subtitles will be saved as .vtt instead "
                  "of .srt. Install ffmpeg for automatic conversion.)")
 
-    with JOBS_LOCK:
-        JOBS[job.id] = job
-    threading.Thread(
-        target=jobs.run_download,
-        args=(job, command),
-        kwargs={"ffmpeg": bool(FFMPEG)},
-        daemon=True,
-    ).start()
-    return job
+    return QUEUE.add(job)
+
+
+def queue_report():
+    """Everything the UI needs to draw the queue in one response."""
+    report = QUEUE.state()
+    report["jobs"] = QUEUE.snapshot()
+    return report
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -117,13 +124,15 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/status":
             job_id = parse_qs(urlparse(self.path).query).get("id", [None])[0]
-            with JOBS_LOCK:
-                job = JOBS.get(job_id)
-                payload = job.to_dict() if job else None
-            if payload is None:
+            job = QUEUE.jobs.get(job_id)
+            if job is None:
                 self._send_json({"error": "unknown job"}, 404)
             else:
-                self._send_json(payload)
+                self._send_json(job.to_dict())
+            return
+
+        if path == "/api/queue":
+            self._send_json(queue_report())
             return
 
         if path == "/api/info":
@@ -147,16 +156,30 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_POST(self):
-        if urlparse(self.path).path != "/api/download":
-            self.send_response(404)
-            self.end_headers()
+        path = urlparse(self.path).path
+
+        if path == "/api/download":
+            try:
+                self._send_json({"id": enqueue(self._read_json()).id})
+            except ValueError as error:
+                self._send_json({"error": str(error)}, 400)
             return
 
-        payload = self._read_json()
-        if not (payload.get("url") or "").strip():
-            self._send_json({"error": "Missing URL"}, 400)
+        if path == "/api/stop":
+            dropped = QUEUE.stop_after_current()
+            self._send_json({"dropped": len(dropped)})
             return
-        self._send_json({"id": start_job(payload).id})
+
+        if path == "/api/cancel":
+            job_id = self._read_json().get("id")
+            if QUEUE.cancel(job_id):
+                self._send_json({"ok": True})
+            else:
+                self._send_json({"error": "unknown job"}, 404)
+            return
+
+        self.send_response(404)
+        self.end_headers()
 
 
 def main():

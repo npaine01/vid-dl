@@ -49,3 +49,30 @@ class TestDownloadCommandForRequest(unittest.TestCase):
         job, _ = server.prepare_download(
             {"url": "u", "quality": "9000"}, ffmpeg=None)
         self.assertEqual(job.quality, server.ytdlp.DEFAULT_QUALITY)
+
+
+class TestQueueEndpoints(unittest.TestCase):
+    """The server owns one queue; these cover the wiring around it."""
+
+    def setUp(self):
+        self.ran = []
+        server.QUEUE = server.jobs.JobQueue(
+            runner=lambda job: (self.ran.append(job.id),
+                                setattr(job, "status", "done"))).start()
+
+    def test_enqueue_adds_a_job_and_returns_its_id(self):
+        job = server.enqueue({"url": "https://example.com/x"})
+        self.assertTrue(server.QUEUE.wait_idle())
+        self.assertIn(job.id, self.ran)
+
+    def test_queue_report_lists_jobs_and_queue_state(self):
+        server.enqueue({"url": "https://example.com/x"})
+        self.assertTrue(server.QUEUE.wait_idle())
+        report = server.queue_report()
+        self.assertEqual(len(report["jobs"]), 1)
+        self.assertIn("stopping", report)
+        self.assertIn("pending", report)
+
+    def test_rejects_a_request_with_no_url(self):
+        with self.assertRaises(ValueError):
+            server.enqueue({"url": "   "})

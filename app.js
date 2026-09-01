@@ -1,8 +1,12 @@
 let mode = "video";
-let pollTimer = null;
+
 const qualitySelect = document.getElementById("quality");
 const subsCheckbox = document.getElementById("subs");
 const subsRow = document.getElementById("subsRow");
+const queueBlock = document.getElementById("queueBlock");
+const queueList = document.getElementById("queueList");
+const queueCount = document.getElementById("queueCount");
+const stopBtn = document.getElementById("stopBtn");
 
 document.querySelectorAll(".fmt-btn").forEach(btn => {
   btn.addEventListener("click", () => {
@@ -17,9 +21,7 @@ document.querySelectorAll(".fmt-btn").forEach(btn => {
 
 fetch("/api/info").then(r => r.json()).then(info => {
   document.getElementById("saveLoc").textContent = "Saving to " + info.output_dir;
-  if (info.default_quality) {
-    qualitySelect.value = info.default_quality;
-  }
+  if (info.default_quality) qualitySelect.value = info.default_quality;
   if (!info.ffmpeg_available) {
     const w = document.getElementById("ffmpegWarn");
     w.style.display = "block";
@@ -30,23 +32,19 @@ fetch("/api/info").then(r => r.json()).then(info => {
   }
 }).catch(() => {});
 
-document.getElementById("openFolder").addEventListener("click", () => {
-  fetch("/api/open-folder");
-});
-
-document.getElementById("goBtn").addEventListener("click", startDownload);
+document.getElementById("openFolder").addEventListener("click", () => fetch("/api/open-folder"));
+document.getElementById("goBtn").addEventListener("click", addToQueue);
 document.getElementById("url").addEventListener("keydown", e => {
-  if (e.key === "Enter") startDownload();
+  if (e.key === "Enter") addToQueue();
+});
+stopBtn.addEventListener("click", () => {
+  fetch("/api/stop", { method: "POST" }).then(refresh);
 });
 
-function startDownload() {
-  const url = document.getElementById("url").value.trim();
+function addToQueue() {
+  const urlInput = document.getElementById("url");
+  const url = urlInput.value.trim();
   if (!url) return;
-  const btn = document.getElementById("goBtn");
-  btn.disabled = true;
-  btn.textContent = "Working…";
-  document.getElementById("statusBlock").style.display = "block";
-  setState("starting", 0, [], null, null, null);
 
   fetch("/api/download", {
     method: "POST",
@@ -57,77 +55,101 @@ function startDownload() {
       sub_lang: (mode === "video" && subsCheckbox.checked) ? "en" : null
     })
   }).then(r => r.json()).then(data => {
-    if (data.error) {
-      setState("error", 0, [data.error], data.error);
-      resetBtn();
-      return;
+    if (data.error) return;
+    urlInput.value = "";
+    refresh();
+  }).catch(() => {});
+}
+
+function cancel(id) {
+  fetch("/api/cancel", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id })
+  }).then(refresh);
+}
+
+const LABELS = {
+  queued: "Queued", running: "Downloading", done: "Done",
+  error: "Failed", cancelled: "Cancelled"
+};
+
+function describe(job) {
+  if (job.status === "running") {
+    return (job.stage === "downloading" ? "Downloading " : "Working ") +
+           Math.round(job.percent) + "%";
+  }
+  return LABELS[job.status] || job.status;
+}
+
+function render(report) {
+  const jobs = report.jobs || [];
+  if (!jobs.length) {
+    queueBlock.style.display = "none";
+    return;
+  }
+  queueBlock.style.display = "block";
+
+  const active = jobs.filter(j => j.status === "queued" || j.status === "running").length;
+  queueCount.textContent = active ? `· ${active} active` : "· idle";
+  stopBtn.disabled = report.pending === 0;
+  stopBtn.textContent = report.stopping ? "Stopped" : "Stop after current";
+
+  queueList.innerHTML = "";
+  jobs.forEach(job => {
+    const row = document.createElement("div");
+    row.className = "job " + job.status;
+
+    const stoppable = job.status === "queued" || job.status === "running";
+    const name = job.filename || job.title || job.url;
+
+    const head = document.createElement("div");
+    head.className = "job-head";
+    head.innerHTML =
+      `<span class="job-name"></span><span class="job-state">${describe(job)}</span>`;
+    head.querySelector(".job-name").textContent = name;
+
+    if (stoppable) {
+      const btn = document.createElement("button");
+      btn.className = "job-cancel";
+      btn.title = job.status === "running" ? "Cancel this download" : "Remove from queue";
+      btn.textContent = "×";
+      btn.addEventListener("click", () => cancel(job.id));
+      head.appendChild(btn);
     }
-    poll(data.id);
-  }).catch(err => {
-    setState("error", 0, [String(err)],
-      "Couldn't reach the downloader server. Try quitting and relaunching " +
-      "'Start YouTube Downloader.command', then reload this page.");
-    resetBtn();
+    row.appendChild(head);
+
+    if (job.status === "running") {
+      const bar = document.createElement("div");
+      bar.className = "progress-outer";
+      bar.innerHTML = `<div class="progress-inner" style="width:${job.percent}%"></div>`;
+      row.appendChild(bar);
+    }
+
+    const meta = [];
+    if (job.size) meta.push("Total size: " + job.size);
+    if (job.error) meta.push(`<span class="err">${job.error}</span>`);
+    if (meta.length) {
+      const line = document.createElement("div");
+      line.className = "job-meta";
+      line.innerHTML = meta.join(" · ");
+      row.appendChild(line);
+    }
+
+    if (job.status === "running" && job.log && job.log.length) {
+      const log = document.createElement("pre");
+      log.className = "job-log";
+      log.textContent = job.log.slice(-6).join("\n");
+      row.appendChild(log);
+    }
+
+    queueList.appendChild(row);
   });
 }
 
-let pollFailCount = 0;
-let stalledSince = null;
-
-function poll(id) {
-  clearInterval(pollTimer);
-  pollFailCount = 0;
-  stalledSince = Date.now();
-  pollTimer = setInterval(() => {
-    fetch("/api/status?id=" + id).then(r => r.json()).then(job => {
-      pollFailCount = 0;
-      if (job.status !== "starting") stalledSince = Date.now();
-      let log = job.log || [];
-      if (job.status === "starting" && Date.now() - stalledSince > 15000) {
-        log = log.concat(["(Still starting after 15s — the URL may be invalid, " +
-          "or the server may need a restart. Feel free to try again or relaunch " +
-          "'Start YouTube Downloader.command'.)"]);
-      }
-      setState(job.status, job.percent || 0, log, job.error, job.filename, job.size);
-      if (job.status === "done" || job.status === "error") {
-        clearInterval(pollTimer);
-        resetBtn();
-      }
-    }).catch(() => {
-      pollFailCount += 1;
-      if (pollFailCount >= 3) {
-        clearInterval(pollTimer);
-        setState("error", 0, ["Lost connection to the downloader server."],
-          "Lost connection to the server. Try relaunching 'Start YouTube Downloader.command'.");
-        resetBtn();
-      }
-    });
-  }, 800);
+function refresh() {
+  return fetch("/api/queue").then(r => r.json()).then(render).catch(() => {});
 }
 
-function setState(status, percent, log, error, filename, size) {
-  document.getElementById("progressInner").style.width = percent + "%";
-  document.getElementById("percentText").textContent = Math.round(percent) + "%";
-  const stateEl = document.getElementById("stateText");
-  stateEl.classList.remove("done", "error");
-  if (status === "done") {
-    stateEl.textContent = "Done" + (filename ? ": " + filename : "");
-    stateEl.classList.add("done");
-  } else if (status === "error") {
-    stateEl.textContent = "Error: " + (error || "something went wrong");
-    stateEl.classList.add("error");
-  } else if (status === "running") {
-    stateEl.textContent = "Downloading…";
-  } else {
-    stateEl.textContent = "Starting…";
-  }
-  document.getElementById("logBox").textContent = (log || []).join("\n");
-  const sizeEl = document.getElementById("sizeText");
-  sizeEl.textContent = size ? "Total size: " + size : "";
-}
-
-function resetBtn() {
-  const btn = document.getElementById("goBtn");
-  btn.disabled = false;
-  btn.textContent = "Download";
-}
+refresh();
+setInterval(refresh, 800);

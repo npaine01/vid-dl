@@ -163,3 +163,46 @@ pre.log {
   border-radius: 4px;
   font-size: 11px;
 }
+
+/* --- queue --- */
+.queue-block { margin-top: 24px; border-top: 1px solid var(--border); padding-top: 18px; }
+.queue-head {
+  display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;
+}
+.queue-title { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.queue-count { color: var(--text); }
+.stop-btn {
+  background: transparent; border: 1px solid var(--border); color: var(--muted);
+  border-radius: 8px; padding: 5px 10px; font-size: 12px; cursor: pointer;
+}
+.stop-btn:hover:not(:disabled) { border-color: var(--err); color: var(--err); }
+.stop-btn:disabled { opacity: .35; cursor: not-allowed; }
+
+.job {
+  background: #0d0f14; border: 1px solid var(--border); border-radius: 10px;
+  padding: 10px 12px; margin-bottom: 8px;
+}
+.job.running { border-color: rgba(77,171,247,0.4); }
+.job.done { opacity: .6; }
+.job.cancelled, .job.error { opacity: .75; }
+.job-head { display: flex; align-items: center; gap: 10px; }
+.job-name {
+  flex: 1; font-size: 13px; color: var(--text); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.job-state { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.job.done .job-state { color: var(--ok); }
+.job.error .job-state { color: var(--err); }
+.job-cancel {
+  background: transparent; border: none; color: var(--muted); cursor: pointer;
+  font-size: 16px; line-height: 1; padding: 0 2px;
+}
+.job-cancel:hover { color: var(--err); }
+.job .progress-outer { margin-top: 8px; height: 4px; }
+.job-meta { font-size: 11px; color: var(--muted); margin-top: 6px; }
+.job-meta .err { color: var(--err); }
+.job-log {
+  background: #08090d; border: 1px solid var(--border); border-radius: 6px;
+  padding: 8px; font-size: 10px; color: var(--muted); max-height: 120px;
+  overflow-y: auto; margin-top: 8px; white-space: pre-wrap; word-break: break-all;
+}
