@@ -225,3 +225,31 @@ pre.log {
 .sub-note { font-size: 12px; color: var(--muted); margin: 8px 0 0; line-height: 1.45; }
 .sub-note code { background: rgba(0,0,0,0.3); padding: 1px 5px; border-radius: 4px; font-size: 11px; }
 .sub-note.warn-text { color: #ffd43b; }
+
+/* --- playlist picker --- */
+.picker {
+  border: 1px solid var(--border); border-radius: 10px;
+  background: #0d0f14; padding: 12px; margin-bottom: 18px;
+}
+.picker-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; }
+.picker-title { font-size: 13px; color: var(--text); font-weight: 600; }
+.picker-actions { font-size: 12px; color: var(--muted); }
+.picker-actions a { color: var(--accent2); cursor: pointer; }
+.picker-actions .sep { margin: 0 6px; opacity: .5; }
+.picker-list { max-height: 220px; overflow-y: auto; margin-bottom: 10px; }
+.picker-row {
+  display: flex; align-items: center; gap: 9px; padding: 5px 2px;
+  font-size: 13px; color: var(--text); border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.picker-row:last-child { border-bottom: none; }
+.picker-row input { width: 15px; height: 15px; accent-color: var(--accent2); cursor: pointer; flex: none; }
+.picker-row label { flex: 1; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  text-transform: none; letter-spacing: normal; font-size: 13px; color: var(--text); }
+.picker-row .dur { font-size: 11px; color: var(--muted); flex: none; font-variant-numeric: tabular-nums; }
+.probe-btn {
+  width: 100%; padding: 9px; border-radius: 8px; border: 1px solid var(--border);
+  background: transparent; color: var(--accent2); font-size: 13px; cursor: pointer;
+}
+.probe-btn:hover:not(:disabled) { background: rgba(77,171,247,0.08); }
+.probe-btn:disabled { color: var(--muted); cursor: not-allowed; opacity: .5; }
+.track-kind { font-size: 11px; color: var(--muted); }

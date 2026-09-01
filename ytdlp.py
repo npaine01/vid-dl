@@ -1,10 +1,14 @@
-"""yt-dlp command construction and output parsing.
+"""yt-dlp command construction, output parsing, and execution helpers.
 
-Pure functions: nothing here runs a subprocess, touches the filesystem, or
-reads global configuration. Callers pass in what they know.
+Command building and parsing are pure -- callers pass in what they know. The
+few helpers at the end that actually invoke yt-dlp take an injectable runner
+so they can be tested without touching the network.
 """
+import concurrent.futures
+import json
 import os
 import re
+import subprocess
 import sys
 
 DEFAULT_QUALITY = "1080"
@@ -100,3 +104,169 @@ def parse_progress(line):
             update["filename"] = name
             update["final"] = line.startswith(FINAL_MARKERS)
     return update
+
+
+WATCH_URL = "https://www.youtube.com/watch?v="
+
+# Languages the app offers. YouTube machine-translates its automatic captions
+# into ~157 languages; listing them all would bury the few that are real.
+OFFERED_LANGUAGES = ("en", "ja", "zh-Hans", "zh-Hant", "it", "es", "ko")
+
+KIND_ORDER = {"captions": 0, "original": 1, "translated": 2}
+
+
+def build_resolve_command(url):
+    """List a playlist's contents without fetching any of them."""
+    return [sys.executable, "-m", "yt_dlp", "--flat-playlist",
+            "--dump-single-json", "--no-warnings", url]
+
+
+def build_probe_command(url):
+    """Fetch one video's metadata, including which subtitle tracks exist."""
+    return [sys.executable, "-m", "yt_dlp", "--dump-single-json",
+            "--no-playlist", "--skip-download", "--no-warnings", url]
+
+
+def parse_resolution(info):
+    """Normalise a resolve response into {kind, title, items}."""
+    if info.get("_type") == "playlist" or "entries" in info:
+        entries = info.get("entries") or []
+        items = [_item(entry) for entry in entries if entry]
+        return {"kind": "playlist", "title": info.get("title") or "Playlist",
+                "items": [item for item in items if item]}
+    item = _item(info)
+    return {"kind": "video", "title": info.get("title") or "",
+            "items": [item] if item else []}
+
+
+def _item(entry):
+    identifier = entry.get("id")
+    url = entry.get("url") or entry.get("webpage_url")
+    if not url and identifier:
+        url = WATCH_URL + identifier
+    if not url:
+        return None
+    return {"id": identifier, "url": url,
+            "title": entry.get("title") or url,
+            "duration": entry.get("duration")}
+
+
+def parse_subtitle_tracks(info):
+    """The subtitle tracks worth offering for one video.
+
+    Three kinds, and the difference matters. Human-authored captions are
+    authoritative. The automatic track in the video's own language is speech
+    recognition -- imperfect, especially on names. Everything else YouTube
+    lists is a machine translation *of that recognition*, so it carries both
+    sets of errors.
+    """
+    authored = info.get("subtitles") or {}
+    automatic = info.get("automatic_captions") or {}
+    source = (info.get("language") or "").lower()
+
+    tracks, seen = [], set()
+
+    for code, formats in sorted(authored.items()):
+        if code.endswith("-orig") or code in seen:
+            continue
+        seen.add(code)
+        tracks.append({"code": code, "name": _name(formats, code),
+                       "kind": "captions"})
+
+    for code, formats in sorted(automatic.items()):
+        base = code[:-5] if code.endswith("-orig") else code
+        if base in seen:
+            continue
+        is_source = base.lower() == source
+        if not is_source and base not in OFFERED_LANGUAGES:
+            continue
+        seen.add(base)
+        tracks.append({"code": base, "name": _name(formats, base),
+                       "kind": "original" if is_source else "translated"})
+
+    tracks.sort(key=lambda track: (KIND_ORDER[track["kind"]], track["code"]))
+    return tracks
+
+
+def _name(formats, code):
+    for entry in formats or []:
+        if entry.get("name"):
+            return entry["name"].replace(" (Original)", "")
+    return code
+
+
+def merge_tracks(per_video):
+    """Combine per-video track lists, counting how many offer each language."""
+    total = len(per_video)
+    if not total:
+        return []
+
+    counts, details = {}, {}
+    for tracks in per_video:
+        for track in tracks:
+            counts[track["code"]] = counts.get(track["code"], 0) + 1
+            details.setdefault(track["code"], track)
+
+    merged = []
+    for code, count in counts.items():
+        track = dict(details[code])
+        track["count"] = count
+        track["total"] = total
+        merged.append(track)
+
+    # Languages every video has come first; then real captions before
+    # machine translations.
+    merged.sort(key=lambda track: (track["count"] < total,
+                                   KIND_ORDER[track["kind"]], track["code"]))
+    return merged
+
+
+PROBE_WORKERS = 4
+
+
+class ResolveError(Exception):
+    """yt-dlp could not describe the URL."""
+
+
+def _run_json(command):
+    result = subprocess.run(command, capture_output=True, text=True, timeout=120)
+    return result.stdout
+
+
+def resolve(url, run=_run_json):
+    """Describe `url`: a single video, or a playlist and its contents."""
+    try:
+        output = run(build_resolve_command(url))
+    except (OSError, subprocess.SubprocessError) as error:
+        raise ResolveError(f"Could not read that URL: {error}") from error
+
+    if not (output or "").strip():
+        raise ResolveError(
+            "yt-dlp returned nothing for that URL. It may be private, "
+            "region-locked, or not a video link.")
+    try:
+        return parse_resolution(json.loads(output))
+    except json.JSONDecodeError as error:
+        raise ResolveError("Could not understand yt-dlp's response.") from error
+
+
+def probe_many(urls, run=_run_json, workers=PROBE_WORKERS):
+    """Which subtitle languages the given videos offer, merged.
+
+    One network round-trip per video, so this runs only over the videos
+    actually selected, several at a time. A video that fails to probe is
+    skipped rather than losing the whole batch.
+    """
+    if not urls:
+        return []
+
+    def probe(url):
+        try:
+            return parse_subtitle_tracks(json.loads(run(build_probe_command(url))))
+        except (OSError, subprocess.SubprocessError, json.JSONDecodeError,
+                ValueError, TypeError):
+            return None
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        results = list(pool.map(probe, urls))
+    return merge_tracks([tracks for tracks in results if tracks is not None])

@@ -8,6 +8,14 @@ const subOptions = document.getElementById("subOptions");
 const sizeField = document.getElementById("sizeField");
 const subNote = document.getElementById("subNote");
 let canBurn = true;
+
+const picker = document.getElementById("picker");
+const pickerTitle = document.getElementById("pickerTitle");
+const pickerList = document.getElementById("pickerList");
+const probeBtn = document.getElementById("probeBtn");
+const probeNote = document.getElementById("probeNote");
+const goBtn = document.getElementById("goBtn");
+let items = [];
 const queueBlock = document.getElementById("queueBlock");
 const queueList = document.getElementById("queueList");
 const queueCount = document.getElementById("queueCount");
@@ -49,7 +57,7 @@ function updateSubtitleOptions() {
   }
 }
 
-subMode.addEventListener("change", updateSubtitleOptions);
+subMode.addEventListener("change", () => { updateSubtitleOptions(); updateButton(); });
 
 fetch("/api/info").then(r => r.json()).then(info => {
   document.getElementById("saveLoc").textContent = "Saving to " + info.output_dir;
@@ -73,7 +81,11 @@ fetch("/api/info").then(r => r.json()).then(info => {
 }).catch(() => {});
 
 document.getElementById("openFolder").addEventListener("click", () => fetch("/api/open-folder"));
-document.getElementById("goBtn").addEventListener("click", addToQueue);
+goBtn.addEventListener("click", addToQueue);
+document.getElementById("selectAll").addEventListener("click", () => setAll(true));
+document.getElementById("selectNone").addEventListener("click", () => setAll(false));
+document.getElementById("pickerClose").addEventListener("click", closePicker);
+probeBtn.addEventListener("click", probeLanguages);
 document.getElementById("url").addEventListener("keydown", e => {
   if (e.key === "Enter") addToQueue();
 });
@@ -81,30 +93,174 @@ stopBtn.addEventListener("click", () => {
   fetch("/api/stop", { method: "POST" }).then(refresh);
 });
 
+function options() {
+  return {
+    mode,
+    quality: qualitySelect.value,
+    sub_mode: mode === "video" ? subMode.value : "none",
+    sub_lang: (mode === "video" && subMode.value !== "none") ? subLang.value : null,
+    sub_size: subSize.value
+  };
+}
+
+function showError(message) {
+  subNote.classList.add("warn-text");
+  subNote.textContent = message;
+}
+
+function formatDuration(seconds) {
+  if (!seconds) return "";
+  const m = Math.floor(seconds / 60), s = Math.round(seconds % 60);
+  return m >= 60
+    ? `${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}:${String(s).padStart(2, "0")}`
+    : `${m}:${String(s).padStart(2, "0")}`;
+}
+
+function selected() {
+  return [...pickerList.querySelectorAll("input:checked")]
+    .map(box => items[Number(box.dataset.index)]);
+}
+
+function setAll(checked) {
+  pickerList.querySelectorAll("input").forEach(box => { box.checked = checked; });
+  updateButton();
+}
+
+function updateButton() {
+  const count = selected().length;
+  goBtn.textContent = picker.style.display === "none"
+    ? "Add to queue"
+    : (count ? `Add ${count} to queue` : "Nothing selected");
+  goBtn.disabled = picker.style.display !== "none" && count === 0;
+  probeBtn.disabled = count === 0 || subMode.value === "none";
+  probeBtn.style.display = subMode.value === "none" ? "none" : "block";
+}
+
+function closePicker() {
+  picker.style.display = "none";
+  items = [];
+  probeNote.textContent = "";
+  updateButton();
+}
+
+function showPicker(result) {
+  items = result.items;
+  pickerTitle.textContent = `${result.title} — ${items.length} videos`;
+  pickerList.innerHTML = "";
+
+  items.forEach((item, index) => {
+    const row = document.createElement("div");
+    row.className = "picker-row";
+
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = true;
+    box.dataset.index = index;
+    box.id = "pick" + index;
+    box.addEventListener("change", updateButton);
+
+    const label = document.createElement("label");
+    label.htmlFor = box.id;
+    label.textContent = item.title;
+
+    const duration = document.createElement("span");
+    duration.className = "dur";
+    duration.textContent = formatDuration(item.duration);
+
+    row.append(box, label, duration);
+    pickerList.appendChild(row);
+  });
+
+  picker.style.display = "block";
+  updateButton();
+}
+
 function addToQueue() {
+  if (picker.style.display !== "none") return queueSelected();
+
   const urlInput = document.getElementById("url");
   const url = urlInput.value.trim();
   if (!url) return;
 
-  fetch("/api/download", {
+  goBtn.disabled = true;
+  goBtn.textContent = "Looking up…";
+  subNote.classList.remove("warn-text");
+
+  fetch("/api/resolve", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      url, mode,
-      quality: qualitySelect.value,
-      sub_mode: mode === "video" ? subMode.value : "none",
-      sub_lang: (mode === "video" && subMode.value !== "none") ? subLang.value : null,
-      sub_size: subSize.value
-    })
-  }).then(r => r.json()).then(data => {
-    if (data.error) {
-      subNote.classList.add("warn-text");
-      subNote.textContent = data.error;
+    body: JSON.stringify({ url })
+  }).then(r => r.json()).then(result => {
+    goBtn.disabled = false;
+    goBtn.textContent = "Add to queue";
+    if (result.error) return showError(result.error);
+
+    if (result.kind === "playlist" && result.items.length > 1) {
+      showPicker(result);
       return;
     }
-    urlInput.value = "";
+    queue([{ url, title: result.items.length ? result.items[0].title : null }]);
+  }).catch(() => {
+    goBtn.disabled = false;
+    goBtn.textContent = "Add to queue";
+    showError("Could not reach the downloader.");
+  });
+}
+
+function queueSelected() {
+  queue(selected().map(item => ({ url: item.url, title: item.title })));
+}
+
+function queue(chosen) {
+  if (!chosen.length) return;
+  fetch("/api/enqueue", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...options(), items: chosen })
+  }).then(r => r.json()).then(data => {
+    if (data.error) return showError(data.error);
+    document.getElementById("url").value = "";
+    closePicker();
     refresh();
-  }).catch(() => {});
+  }).catch(() => showError("Could not reach the downloader."));
+}
+
+function probeLanguages() {
+  const chosen = selected();
+  if (!chosen.length) return;
+  probeBtn.disabled = true;
+  probeNote.textContent =
+    `Checking ${chosen.length} video${chosen.length > 1 ? "s" : ""}… ` +
+    "this needs one lookup per video, so it can take a few seconds each.";
+
+  fetch("/api/probe-subs", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ urls: chosen.map(item => item.url) })
+  }).then(r => r.json()).then(data => {
+    probeBtn.disabled = false;
+    const languages = data.languages || [];
+    if (!languages.length) {
+      probeNote.textContent = "No subtitles found on the selected videos.";
+      return;
+    }
+    const KINDS = { captions: "captions", original: "auto-generated",
+                    translated: "machine-translated" };
+    subLang.innerHTML = "";
+    languages.forEach(track => {
+      const option = document.createElement("option");
+      option.value = track.code;
+      const partial = track.count < track.total ? ` — ${track.count} of ${track.total}` : "";
+      option.textContent = `${track.name} (${KINDS[track.kind]})${partial}`;
+      subLang.appendChild(option);
+    });
+    probeNote.textContent =
+      "Machine-translated tracks are translations of the automatic transcript, " +
+      "so they carry both transcription and translation errors.";
+  }).catch(() => {
+    probeBtn.disabled = false;
+    probeNote.textContent = "Could not check languages.";
+  });
 }
 
 function cancel(id) {

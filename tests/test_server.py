@@ -190,3 +190,35 @@ class TestSidecarRepair(unittest.TestCase):
         result = server.repair_sidecar(path)
         self.assertTrue(Path(self.folder.name, "Clip.en.srt").exists())
         self.assertEqual(result["path"], str(Path(self.folder.name, "Clip.en.srt")))
+
+
+class TestBatchEnqueue(unittest.TestCase):
+    def setUp(self):
+        server.QUEUE = server.jobs.JobQueue(
+            runner=lambda job: setattr(job, "status", "done")).start()
+
+    def test_queues_every_selected_item_in_order(self):
+        created = server.enqueue_many({
+            "items": [{"url": "https://example.com/a", "title": "A"},
+                      {"url": "https://example.com/b", "title": "B"}],
+            "quality": "720",
+        })
+        self.assertEqual([job.title for job in created], ["A", "B"])
+        self.assertEqual([job.quality for job in created], ["720", "720"])
+
+    def test_applies_one_subtitle_choice_to_the_whole_batch(self):
+        created = server.enqueue_many({
+            "items": [{"url": "https://example.com/a"}, {"url": "https://example.com/b"}],
+            "sub_mode": "sidecar", "sub_lang": "ja",
+        })
+        self.assertTrue(all(job.sub_lang == "ja" for job in created))
+        self.assertTrue(all(job.sub_mode == "sidecar" for job in created))
+
+    def test_rejects_a_batch_with_no_items(self):
+        with self.assertRaises(ValueError):
+            server.enqueue_many({"items": []})
+
+    def test_skips_entries_without_a_url(self):
+        created = server.enqueue_many({
+            "items": [{"title": "no url"}, {"url": "https://example.com/b"}]})
+        self.assertEqual(len(created), 1)

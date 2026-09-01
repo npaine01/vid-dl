@@ -32,6 +32,8 @@ FFPROBE = media.ffprobe_for(FFMPEG)
 CAN_BURN = media.can_burn(FFMPEG)
 
 SUB_MODES = ("none", "sidecar", "soft", "burn")
+# Probing costs one network round-trip per video; cap what one request can ask for.
+PROBE_LIMIT = 40
 NEEDS_FFMPEG_FULL = (
     "Burning subtitles needs an ffmpeg built with libass, which Homebrew's "
     "standard formula no longer includes. Install it with: "
@@ -175,6 +177,24 @@ def enqueue(payload):
     return QUEUE.add(job)
 
 
+def enqueue_many(payload):
+    """Queue a batch of items sharing one set of options."""
+    items = [item for item in (payload.get("items") or [])
+             if (item.get("url") or "").strip()]
+    if not items:
+        raise ValueError("Nothing selected")
+
+    shared = {key: payload.get(key)
+              for key in ("mode", "quality", "sub_mode", "sub_lang", "sub_size")}
+
+    created = []
+    for item in items:
+        job = enqueue({**shared, "url": item["url"]})
+        job.title = item.get("title") or job.title
+        created.append(job)
+    return created
+
+
 def queue_report():
     """Everything the UI needs to draw the queue in one response."""
     report = QUEUE.state()
@@ -256,6 +276,26 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/download":
             try:
                 self._send_json({"id": enqueue(self._read_json()).id})
+            except ValueError as error:
+                self._send_json({"error": str(error)}, 400)
+            return
+
+        if path == "/api/resolve":
+            try:
+                self._send_json(ytdlp.resolve((self._read_json().get("url") or "").strip()))
+            except ytdlp.ResolveError as error:
+                self._send_json({"error": str(error)}, 400)
+            return
+
+        if path == "/api/probe-subs":
+            urls = self._read_json().get("urls") or []
+            self._send_json({"languages": ytdlp.probe_many(urls[:PROBE_LIMIT])})
+            return
+
+        if path == "/api/enqueue":
+            try:
+                created = enqueue_many(self._read_json())
+                self._send_json({"ids": [job.id for job in created]})
             except ValueError as error:
                 self._send_json({"error": str(error)}, 400)
             return
