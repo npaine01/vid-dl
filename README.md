@@ -24,25 +24,31 @@ This repository does **not** include or redistribute yt-dlp itself. It is downlo
 - **macOS** with **Python 3** (already included on modern macOS; otherwise install from [python.org](https://www.python.org/downloads/))
 - **[ffmpeg](https://ffmpeg.org)** — optional but recommended. Needed for MP3 extraction and for merging separate video/audio streams into the best-quality MP4. Without it, video quality is capped to formats that don't require merging, and MP3 downloads won't work.
 
-  Get [Homebrew](https://brew.sh) first if you don't have it, then pick one:
+  Get [Homebrew](https://brew.sh) first if you don't have it, then install
+  **one** of these — not both:
 
   ```bash
-  brew install ffmpeg        # downloads, MP3, merging
-  brew install ffmpeg-full   # the above, plus burning subtitles into video
+  brew install ffmpeg        # downloads, MP3, merging — 14 dependencies
+  brew install ffmpeg-full   # all of the above, plus burning subtitles in — 102 dependencies
   ```
 
-  **Why two options.** Homebrew's `ffmpeg` formula no longer includes libass,
-  the library that draws subtitles into the picture, so it cannot burn
-  subtitles. `ffmpeg-full` can. It is also *keg-only*, meaning Homebrew
-  deliberately keeps it off your `PATH` — this app looks for it in its install
-  location, so you don't have to do anything, but be aware that typing
-  `ffmpeg` in Terminal won't find it.
+  `ffmpeg-full` is a superset of `ffmpeg`. Choose it only if you want
+  subtitles burned permanently into the picture, because Homebrew's `ffmpeg`
+  formula no longer includes libass, the library that draws them. It is
+  *keg-only*, meaning Homebrew keeps it off your `PATH` on purpose — this app
+  looks in its install location, so there is nothing for you to configure, but
+  be aware that typing `ffmpeg` in Terminal won't find it.
 
-  **If you install both, keep them updated together** (`brew upgrade`).
-  Installing one upgrades shared libraries the other may still be linked
-  against, which can leave the older copy unable to start at all. This app
-  runs each candidate before trusting it, so it will pass over a broken one
-  rather than failing mysteriously.
+  **Why not both.** Installing either formula upgrades shared libraries the
+  other one links against. A copy that is behind on updates can be left unable
+  to start at all — it will still look installed, and still fail. That is not
+  about the order you install them in; it is about one of them being stale.
+  Keeping Homebrew current (`brew upgrade`) avoids it, and if you end up with
+  both and only want one, `brew uninstall ffmpeg` is safe.
+
+  This app runs each ffmpeg it finds before trusting it, so a broken copy is
+  passed over rather than causing a confusing failure mid-download.
+
 - **yt-dlp** — installed automatically the first time you run the app. You don't need to install it yourself.
 
 ## Installation
