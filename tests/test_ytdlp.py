@@ -313,3 +313,35 @@ class TestResolvingAndProbing(unittest.TestCase):
 
     def test_probing_nothing_returns_nothing(self):
         self.assertEqual(ytdlp.probe_many([], run=lambda c: ""), [])
+
+
+class TestIdentifyingTheSourceLanguage(unittest.TestCase):
+    """Two signals say which automatic track is the real transcription rather
+    than a translation of it: the `language` field, and the `<code>-orig` key
+    YouTube adds. Neither is reliable alone."""
+
+    def test_matches_a_regional_language_code(self):
+        """`language` is often 'en-US' while the track is plain 'en'."""
+        info = {"language": "en-US",
+                "automatic_captions": {"en": [{"name": "English"}],
+                                       "ja": [{"name": "Japanese"}]}}
+        tracks = {t["code"]: t for t in ytdlp.parse_subtitle_tracks(info)}
+        self.assertEqual(tracks["en"]["kind"], "original")
+        self.assertEqual(tracks["ja"]["kind"], "translated")
+
+    def test_uses_the_orig_marker_when_language_is_missing(self):
+        info = {"automatic_captions": {"en": [{"name": "English"}],
+                                       "en-orig": [{"name": "English (Original)"}],
+                                       "ja": [{"name": "Japanese"}]}}
+        tracks = {t["code"]: t for t in ytdlp.parse_subtitle_tracks(info)}
+        self.assertEqual(tracks["en"]["kind"], "original")
+        self.assertEqual(tracks["ja"]["kind"], "translated")
+
+    def test_does_not_treat_a_script_variant_as_the_source(self):
+        """A Chinese source must not make zh-Hant 'original' just by prefix."""
+        info = {"language": "zh-Hans",
+                "automatic_captions": {"zh-Hans": [{"name": "Chinese (Simplified)"}],
+                                       "zh-Hant": [{"name": "Chinese (Traditional)"}]}}
+        tracks = {t["code"]: t for t in ytdlp.parse_subtitle_tracks(info)}
+        self.assertEqual(tracks["zh-Hans"]["kind"], "original")
+        self.assertEqual(tracks["zh-Hant"]["kind"], "translated")

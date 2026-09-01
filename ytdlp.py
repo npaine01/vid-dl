@@ -162,7 +162,7 @@ def parse_subtitle_tracks(info):
     """
     authored = info.get("subtitles") or {}
     automatic = info.get("automatic_captions") or {}
-    source = (info.get("language") or "").lower()
+    source = _source_languages(info.get("language"), automatic)
 
     tracks, seen = [], set()
 
@@ -177,7 +177,7 @@ def parse_subtitle_tracks(info):
         base = code[:-5] if code.endswith("-orig") else code
         if base in seen:
             continue
-        is_source = base.lower() == source
+        is_source = base.lower() in source
         if not is_source and base not in OFFERED_LANGUAGES:
             continue
         seen.add(base)
@@ -186,6 +186,26 @@ def parse_subtitle_tracks(info):
 
     tracks.sort(key=lambda track: (KIND_ORDER[track["kind"]], track["code"]))
     return tracks
+
+
+def _source_languages(declared, automatic):
+    """Codes that identify the video's own language rather than a translation.
+
+    `language` is often regional ('en-US') while the track is plain ('en'), and
+    it is sometimes absent entirely -- but YouTube marks the transcribed track
+    with a `<code>-orig` key, which is the more dependable signal. Only the
+    primary subtag is added, never a broader prefix match, so a Simplified
+    Chinese source does not make Traditional Chinese look original.
+    """
+    codes = set()
+    for key in automatic:
+        if key.endswith("-orig"):
+            codes.add(key[:-5].lower())
+    if declared:
+        declared = declared.lower()
+        codes.add(declared)
+        codes.add(declared.split("-")[0])
+    return codes
 
 
 def _name(formats, code):
