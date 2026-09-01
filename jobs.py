@@ -4,11 +4,16 @@ Named `jobs` rather than `queue` so it does not shadow the standard library
 module the worker builds on.
 """
 import collections
+import os
+import shutil
 import subprocess
+import tempfile
 import threading
 import time
 import uuid
 
+import media
+import subs
 import ytdlp
 
 LOG_LINES = 80
@@ -55,10 +60,18 @@ class Job:
         del self.log[:-LOG_LINES]
 
 
-def _spawn(command):
+def _spawn(command, cwd=None):
     return subprocess.Popen(
         command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        text=True, bufsize=1)
+        text=True, bufsize=1, cwd=cwd)
+
+
+# A name with nothing the filtergraph parser treats as syntax.
+STAGED_SUBTITLE = "subtitles.srt"
+
+NO_FONT = ("Subtitles in {language} need the font {font}, which this Mac "
+           "cannot provide. Burning would produce empty boxes instead of "
+           "text, so the job was stopped before encoding.")
 
 
 def run_download(job, command, spawn=_spawn, ffmpeg=True):
@@ -223,3 +236,69 @@ class JobQueue:
                 "running": self.current.id if self.current else None,
                 "pending": len(self._pending),
             }
+
+
+def run_burn(job, ffmpeg, video, subtitle, output, language=None,
+             size="medium", encoder=media.DEFAULT_ENCODER, duration_ms=None,
+             glossary=(), preview_seconds=None, preview_start=None,
+             spawn=_spawn, font_available=media.font_available):
+    """Render `subtitle` into `video`, writing `output`.
+
+    The subtitle is repaired and copied into a temporary directory under a
+    fixed safe name, and ffmpeg runs from there. Neither the video title nor
+    the subtitle path ever reaches the filtergraph parser, which treats colons
+    and commas as syntax.
+    """
+    font = media.font_for(language)
+    if not font_available(font):
+        job.status = "error"
+        job.error = NO_FONT.format(language=language or "this language", font=font)
+        return
+
+    job.status = "running"
+    job.stage = "burning"
+    job.percent = 0
+    workspace = tempfile.mkdtemp(prefix="vid-dl-burn-")
+    try:
+        staged = os.path.join(workspace, STAGED_SUBTITLE)
+        job.subtitle_stats = subs.repair_file(subtitle, staged, glossary)
+
+        command = media.burn_command(
+            ffmpeg=ffmpeg, video=video, subtitle=STAGED_SUBTITLE, output=output,
+            font=font, size=media.font_size(size), encoder=encoder,
+            preview_seconds=preview_seconds, preview_start=preview_start)
+
+        process = spawn(command, cwd=workspace)
+        job.process = process
+        for line in process.stdout:
+            line = line.rstrip("\n")
+            if not line:
+                continue
+            update = media.parse_encode_progress(line, duration_ms)
+            if update:
+                job.percent = update["percent"]
+            elif not line.startswith(("frame=", "fps=", "bitrate=", "total_size=",
+                                      "out_time", "dup_frames=", "drop_frames=",
+                                      "speed=", "progress=", "stream_")):
+                job.note(line)
+
+        returncode = process.wait()
+        if job.cancelled:
+            job.status = "cancelled"
+        elif returncode == 0:
+            job.status = "done"
+            job.percent = 100
+            job.filename = os.path.basename(output)
+        else:
+            job.status = "error"
+            job.error = "ffmpeg could not burn the subtitles. See log for details."
+    except Exception as error:  # noqa: BLE001
+        if job.cancelled:
+            job.status = "cancelled"
+        else:
+            job.status = "error"
+            job.error = str(error)
+    finally:
+        job.stage = None
+        job.process = None
+        shutil.rmtree(workspace, ignore_errors=True)

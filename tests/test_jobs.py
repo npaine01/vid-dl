@@ -153,3 +153,122 @@ class TestFilenameSelection(unittest.TestCase):
             "[download] Destination: /tmp/Clip.f399.mp4",
         ]))
         self.assertEqual(job.filename, "Clip.f399.mp4")
+
+
+import tempfile
+from pathlib import Path
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import fixtures_for_jobs  # noqa: E402  (see tests/fixtures_for_jobs.py)
+
+
+class TestRunBurn(unittest.TestCase):
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory()
+        self.srt = Path(self.folder.name, "Clip: A Film.en.srt")
+        self.srt.write_text(fixtures_for_jobs.rolling_srt(), encoding="utf-8")
+        self.video = str(Path(self.folder.name, "Clip: A Film.mp4"))
+        Path(self.video).write_bytes(b"not really a video")
+        self.output = str(Path(self.folder.name, "Clip [subbed].mp4"))
+
+    def tearDown(self):
+        self.folder.cleanup()
+
+    def burn(self, spawn, **kwargs):
+        job = jobs.Job(url="x")
+        jobs.run_burn(job, ffmpeg="/x/ffmpeg", video=self.video,
+                      subtitle=str(self.srt), output=self.output,
+                      spawn=spawn, **kwargs)
+        return job
+
+    def test_stages_the_subtitle_under_a_name_safe_for_the_filtergraph(self):
+        seen = {}
+
+        def spawn(command, cwd=None):
+            video_filter = command[command.index("-vf") + 1]
+            name = video_filter.split("subtitles=")[1].split(":force_style")[0]
+            seen["name"] = name
+            seen["cwd"] = cwd
+            # The workspace is torn down afterwards, so check it while it lives.
+            seen["staged_exists"] = Path(cwd, name).exists()
+            return FakeProcess([])
+
+        self.burn(spawn)
+        self.assertNotIn(":", seen["name"])
+        self.assertNotIn(",", seen["name"])
+        self.assertNotIn("/", seen["name"])
+        self.assertIsNotNone(seen["cwd"])
+        self.assertTrue(seen["staged_exists"])
+
+    def test_repairs_rolling_captions_before_burning_them(self):
+        staged = {}
+
+        def spawn(command, cwd=None):
+            name = command[command.index("-vf") + 1]
+            name = name.split("subtitles=")[1].split(":force_style")[0]
+            staged["text"] = Path(cwd, name).read_text(encoding="utf-8")
+            return FakeProcess([])
+
+        self.burn(spawn)
+        self.assertNotIn("00:00:04,350 --> 00:00:04,360", staged["text"])
+        self.assertEqual(staged["text"].count("first line"), 1)
+
+    def test_marks_the_job_done_and_names_the_output(self):
+        job = self.burn(lambda command, cwd=None: FakeProcess([]))
+        self.assertEqual(job.status, "done")
+        self.assertEqual(job.filename, "Clip [subbed].mp4")
+
+    def test_tracks_progress_against_the_known_duration(self):
+        job = jobs.Job(url="x")
+        seen = []
+        process = FakeProcess([])
+
+        def lines():
+            for line in ["out_time=00:00:15.000000", "out_time=00:00:30.000000"]:
+                yield line
+                seen.append(job.percent)
+
+        process.stdout = lines()
+        jobs.run_burn(job, ffmpeg="/x/ffmpeg", video=self.video,
+                      subtitle=str(self.srt), output=self.output,
+                      duration_ms=60000, spawn=lambda c, cwd=None: process)
+        self.assertEqual(seen, [25.0, 50.0])
+        self.assertEqual(job.percent, 100)   # completion overrides
+
+    def test_reports_the_burning_stage_while_it_runs(self):
+        seen = []
+
+        def spawn(command, cwd=None):
+            seen.append(jobs.Job.__dict__ and None)
+            return FakeProcess([])
+
+        job = jobs.Job(url="x")
+        stages = []
+        original = FakeProcess.wait
+
+        def watching(self):
+            stages.append(job.stage)
+            return original(self)
+
+        FakeProcess.wait = watching
+        try:
+            jobs.run_burn(job, ffmpeg="/x/ffmpeg", video=self.video,
+                          subtitle=str(self.srt), output=self.output,
+                          spawn=lambda c, cwd=None: FakeProcess([]))
+        finally:
+            FakeProcess.wait = original
+        self.assertEqual(stages, ["burning"])
+
+    def test_fails_the_job_when_the_font_is_unavailable(self):
+        job = jobs.Job(url="x")
+        jobs.run_burn(job, ffmpeg="/x/ffmpeg", video=self.video,
+                      subtitle=str(self.srt), output=self.output,
+                      language="ja", font_available=lambda name: False,
+                      spawn=lambda c, cwd=None: FakeProcess([]))
+        self.assertEqual(job.status, "error")
+        self.assertIn("Hiragino Sans", job.error)
+
+    def test_reports_an_encoder_failure(self):
+        job = self.burn(lambda command, cwd=None:
+                        FakeProcess(["Error initializing filter"], returncode=1))
+        self.assertEqual(job.status, "error")

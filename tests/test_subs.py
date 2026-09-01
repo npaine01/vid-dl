@@ -284,3 +284,47 @@ class TestCommandLine(unittest.TestCase):
             result = self.run_cli("missing.srt", cwd=folder)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("missing.srt", result.stdout + result.stderr)
+
+
+class TestRepairFile(unittest.TestCase):
+    def test_writes_a_repaired_copy_and_reports_what_it_did(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder, "in.srt")
+            source.write_text(fixtures.rolling(LATIN), encoding="utf-8")
+            target = Path(folder, "out.srt")
+            stats = subs.repair_file(str(source), str(target))
+            self.assertTrue(target.exists())
+            self.assertTrue(stats["rolling"])
+            self.assertEqual([c.lines[0] for c in subs.parse(target.read_text(encoding="utf-8"))],
+                             LATIN)
+
+    def test_copies_authored_captions_through_unchanged(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder, "in.srt")
+            source.write_text(fixtures.authored(LATIN), encoding="utf-8")
+            target = Path(folder, "out.srt")
+            stats = subs.repair_file(str(source), str(target))
+            self.assertFalse(stats["rolling"])
+            self.assertEqual([c.lines for c in subs.parse(target.read_text(encoding="utf-8"))],
+                             [[line] for line in LATIN])
+
+    def test_applies_a_glossary_on_the_way_through(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder, "in.srt")
+            source.write_text(fixtures.rolling(["been along spoke"] + LATIN[1:]),
+                              encoding="utf-8")
+            target = Path(folder, "out.srt")
+            stats = subs.repair_file(str(source), str(target),
+                                     subs.parse_glossary("been along = Bennelong"))
+            self.assertIn("Bennelong", target.read_text(encoding="utf-8"))
+            self.assertEqual(stats["glossary"][0][2], 1)
+
+    def test_converts_vtt_input_to_srt_output(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder, "in.vtt")
+            source.write_text("WEBVTT\n\n00:00:01.000 --> 00:00:04.000\nhello\n",
+                              encoding="utf-8")
+            target = Path(folder, "out.srt")
+            subs.repair_file(str(source), str(target))
+            self.assertIn("00:00:01,000 --> 00:00:04,000",
+                          target.read_text(encoding="utf-8"))

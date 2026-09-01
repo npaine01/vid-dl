@@ -238,6 +238,19 @@ def process(text, entries=()):
     }
 
 
+def repair_file(source, destination, entries=()):
+    """Repair `source` into `destination` as SRT. Returns the stats dict.
+
+    Handles VTT input as well as SRT, so the output is always SRT regardless
+    of what the downloader happened to write.
+    """
+    with open(source, encoding="utf-8-sig") as handle:
+        output, stats = process(handle.read(), entries)
+    with open(destination, "w", encoding="utf-8") as handle:
+        handle.write(output)
+    return stats
+
+
 def _cli(argv):
     import argparse
     import glob
