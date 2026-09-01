@@ -141,10 +141,22 @@ def font_available(name, match=_fc_match):
 ENCODERS = {
     # Measured on 30s of 1080p30: libx264 4.2s, videotoolbox 3.3s. The gap is
     # small enough that a true quality target and hardware independence win.
-    "libx264": ["-c:v", "libx264", "-crf", "18", "-preset", "medium"],
-    "videotoolbox": ["-c:v", "h264_videotoolbox", "-q:v", "60"],
+    #
+    # CRF 23, not 18. Burning re-encodes video that is already compressed, and
+    # a near-lossless target spends most of its bitrate faithfully preserving
+    # the source's own compression artefacts -- measured at 3.5x the source
+    # size, turning a 275MB download into over a gigabyte.
+    "libx264": ["-c:v", "libx264", "-crf", "23", "-preset", "medium"],
+    "videotoolbox": ["-c:v", "h264_videotoolbox", "-q:v", "55"],
 }
 DEFAULT_ENCODER = "libx264"
+
+# Quality alone does not bound the output, so the bitrate is also capped
+# relative to the source. 1.5x leaves room for the subtitle overlay's sharp
+# edges without preserving artefacts. Measured: 3.5x source down to 1.5x,
+# with no visible difference.
+BITRATE_HEADROOM = 1.5
+MIN_BITRATE_KBPS = 500
 
 OUT_TIME_RE = re.compile(r"^out_time=(\d+):(\d{2}):(\d{2})(?:\.(\d+))?")
 
@@ -161,8 +173,20 @@ INCOMPATIBLE_AUDIO = ("opus", "vorbis")
 def audio_arguments(codec):
     """Copy the audio unless it is a codec MP4 players choke on."""
     if codec and codec.lower() in INCOMPATIBLE_AUDIO:
-        return ["-c:a", "aac", "-b:a", "192k"]
+        return ["-c:a", "aac", "-b:a", "128k"]
     return ["-c:a", "copy"]
+
+
+def probe_bitrate(ffprobe, path, run=None):
+    """Overall bitrate of `path` in bits per second, or None."""
+    command = [ffprobe, "-v", "error", "-show_entries", "format=bit_rate",
+               "-of", "default=nw=1:nk=1", path]
+    try:
+        output = run(command) if run else subprocess.run(
+            command, capture_output=True, text=True, timeout=30).stdout
+        return int((output or "").strip())
+    except (OSError, subprocess.SubprocessError, ValueError, AttributeError):
+        return None
 
 
 def probe_audio_codec(ffprobe, path, run=None):
@@ -180,7 +204,8 @@ def probe_audio_codec(ffprobe, path, run=None):
 
 def burn_command(ffmpeg, video, subtitle, output, font=LATIN_FONT,
                  size=SIZES["medium"], encoder=DEFAULT_ENCODER,
-                 preview_seconds=None, preview_start=None, audio_codec=None):
+                 preview_seconds=None, preview_start=None, audio_codec=None,
+                 source_bitrate=None):
     """Render `subtitle` permanently into `video`.
 
     `subtitle` must be a bare filename, with ffmpeg run from the directory
@@ -200,6 +225,10 @@ def burn_command(ffmpeg, video, subtitle, output, font=LATIN_FONT,
     style = f"FontName={font},FontSize={size},Outline=2,Shadow=0"
     command += ["-vf", f"subtitles={subtitle}:force_style='{style}'"]
     command += ENCODERS.get(encoder, ENCODERS[DEFAULT_ENCODER])
+    if source_bitrate:
+        ceiling = max(MIN_BITRATE_KBPS,
+                      int(source_bitrate * BITRATE_HEADROOM / 1000))
+        command += ["-maxrate", f"{ceiling}k", "-bufsize", f"{ceiling * 2}k"]
     command += audio_arguments(audio_codec)
     command += ["-movflags", "+faststart", "-progress", "pipe:1", "-nostats",
                 output]

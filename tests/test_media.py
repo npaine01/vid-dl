@@ -213,7 +213,7 @@ class TestBurnCommand(unittest.TestCase):
     def test_defaults_to_libx264_at_a_quality_target(self):
         command = self.build()
         self.assertEqual(command[command.index("-c:v") + 1], "libx264")
-        self.assertEqual(command[command.index("-crf") + 1], "18")
+        self.assertEqual(command[command.index("-crf") + 1], "23")
 
     def test_can_use_hardware_encoding_on_request(self):
         command = self.build(encoder="videotoolbox")
@@ -312,3 +312,49 @@ class TestProbeAudioCodec(unittest.TestCase):
             raise OSError("no ffprobe")
         self.assertIsNone(
             media.probe_audio_codec("/x/ffprobe", "/in/a.mp4", run=explode))
+
+
+class TestBitrateCap(unittest.TestCase):
+    """Burning re-encodes already-compressed video. At a high quality target
+    it faithfully preserves the source's own compression artefacts, inflating
+    a 275MB download to over a gigabyte."""
+
+    def build(self, **kwargs):
+        kwargs.setdefault("ffmpeg", "/x/ffmpeg")
+        kwargs.setdefault("video", "/in/a.mp4")
+        kwargs.setdefault("subtitle", "s.srt")
+        kwargs.setdefault("output", "/out/a.mp4")
+        return media.burn_command(**kwargs)
+
+    def test_caps_the_bitrate_relative_to_the_source(self):
+        command = self.build(source_bitrate=400_000)
+        self.assertEqual(command[command.index("-maxrate") + 1], "600k")
+
+    def test_gives_the_buffer_room_to_average_out(self):
+        command = self.build(source_bitrate=400_000)
+        self.assertEqual(command[command.index("-bufsize") + 1], "1200k")
+
+    def test_omits_the_cap_when_the_source_bitrate_is_unknown(self):
+        self.assertNotIn("-maxrate", self.build())
+
+    def test_never_caps_below_a_usable_floor(self):
+        """A tiny source must not force an unwatchable re-encode."""
+        command = self.build(source_bitrate=50_000)
+        self.assertEqual(command[command.index("-maxrate") + 1],
+                         f"{media.MIN_BITRATE_KBPS}k")
+
+    def test_targets_a_sane_quality_rather_than_near_lossless(self):
+        self.assertEqual(self.build()[self.build().index("-crf") + 1], "23")
+
+
+class TestProbeBitrate(unittest.TestCase):
+    def test_reads_the_source_bitrate(self):
+        self.assertEqual(
+            media.probe_bitrate("/x/ffprobe", "/in/a.mp4",
+                                run=lambda command: "414388\n"),
+            414388)
+
+    def test_returns_none_when_unavailable(self):
+        self.assertIsNone(
+            media.probe_bitrate("/x/ffprobe", "/in/a.mp4",
+                                run=lambda command: "N/A\n"))

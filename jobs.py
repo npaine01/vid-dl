@@ -246,7 +246,7 @@ class JobQueue:
 def run_burn(job, ffmpeg, video, subtitle, output, language=None,
              size="medium", encoder=media.DEFAULT_ENCODER, duration_ms=None,
              glossary=(), preview_seconds=None, preview_start=None,
-             audio_codec=None, spawn=_spawn,
+             audio_codec=None, source_bitrate=None, spawn=_spawn,
              font_available=media.font_available):
     """Render `subtitle` into `video`, writing `output`.
 
@@ -277,7 +277,7 @@ def run_burn(job, ffmpeg, video, subtitle, output, language=None,
             ffmpeg=ffmpeg, video=video, subtitle=STAGED_SUBTITLE, output=output,
             font=font, size=media.font_size(size), encoder=encoder,
             preview_seconds=preview_seconds, preview_start=preview_start,
-            audio_codec=audio_codec)
+            audio_codec=audio_codec, source_bitrate=source_bitrate)
 
         process = spawn(command, cwd=workspace)
         job.process = process

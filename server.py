@@ -101,6 +101,7 @@ def _run(job):
         jobs.run_burn(job, ffmpeg=FFMPEG, video=video, subtitle=subtitle,
                       output=burned_path(video), language=job.sub_lang,
                       size=job.sub_size, audio_codec=audio_codec,
+                      source_bitrate=media.probe_bitrate(FFPROBE, video),
                       duration_ms=media.probe_duration(FFPROBE, video))
 
 
