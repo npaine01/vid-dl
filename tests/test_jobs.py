@@ -272,3 +272,41 @@ class TestRunBurn(unittest.TestCase):
         job = self.burn(lambda command, cwd=None:
                         FakeProcess(["Error initializing filter"], returncode=1))
         self.assertEqual(job.status, "error")
+
+
+class TestBurnKeepsEarlierRepairStats(unittest.TestCase):
+    """The sidecar is repaired once, before burning. run_burn repairs its own
+    staged copy too, but that second pass sees an already-clean file -- so its
+    stats must not replace the ones describing what actually changed."""
+
+    def test_does_not_overwrite_stats_from_an_earlier_repair(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as folder:
+            srt = Path(folder, "Clip.en.srt")
+            srt.write_text(fixtures_for_jobs.rolling_srt(), encoding="utf-8")
+            video = Path(folder, "Clip.mp4")
+            video.write_bytes(b"v")
+
+            job = jobs.Job(url="x")
+            job.subtitle_stats = {"rolling": True, "cues_in": 29, "cues_out": 15}
+            jobs.run_burn(job, ffmpeg="/x/ffmpeg", video=str(video),
+                          subtitle=str(srt), output=str(Path(folder, "out.mp4")),
+                          spawn=lambda c, cwd=None: FakeProcess([]))
+            self.assertEqual(job.subtitle_stats["cues_in"], 29)
+            self.assertEqual(job.subtitle_stats["cues_out"], 15)
+
+    def test_records_stats_when_nothing_repaired_it_earlier(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as folder:
+            srt = Path(folder, "Clip.en.srt")
+            srt.write_text(fixtures_for_jobs.rolling_srt(), encoding="utf-8")
+            video = Path(folder, "Clip.mp4")
+            video.write_bytes(b"v")
+
+            job = jobs.Job(url="x")
+            jobs.run_burn(job, ffmpeg="/x/ffmpeg", video=str(video),
+                          subtitle=str(srt), output=str(Path(folder, "out.mp4")),
+                          spawn=lambda c, cwd=None: FakeProcess([]))
+            self.assertTrue(job.subtitle_stats["rolling"])

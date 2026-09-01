@@ -76,3 +76,117 @@ class TestQueueEndpoints(unittest.TestCase):
     def test_rejects_a_request_with_no_url(self):
         with self.assertRaises(ValueError):
             server.enqueue({"url": "   "})
+
+
+class TestSubtitleModes(unittest.TestCase):
+    def test_defaults_to_no_subtitles(self):
+        job, command = server.prepare_download({"url": "u"}, ffmpeg="/x/ffmpeg")
+        self.assertEqual(job.sub_mode, "none")
+        self.assertNotIn("--write-subs", command)
+
+    def test_sidecar_downloads_subtitles_without_encoding(self):
+        job, command = server.prepare_download(
+            {"url": "u", "sub_mode": "sidecar", "sub_lang": "ja"}, ffmpeg="/x/ffmpeg")
+        self.assertEqual(job.sub_mode, "sidecar")
+        self.assertIn("--write-subs", command)
+
+    def test_burn_also_requests_the_subtitles_it_will_burn(self):
+        job, command = server.prepare_download(
+            {"url": "u", "sub_mode": "burn", "sub_lang": "ja", "sub_size": "large"},
+            ffmpeg="/x/ffmpeg")
+        self.assertEqual(job.sub_mode, "burn")
+        self.assertEqual(job.sub_size, "large")
+        self.assertIn("--write-subs", command)
+
+    def test_refuses_burning_without_a_capable_ffmpeg(self):
+        with self.assertRaises(ValueError) as caught:
+            server.prepare_download(
+                {"url": "u", "sub_mode": "burn", "sub_lang": "en"},
+                ffmpeg="/x/ffmpeg", can_burn=False)
+        self.assertIn("ffmpeg-full", str(caught.exception))
+
+    def test_falls_back_to_sidecar_for_an_unknown_mode(self):
+        job, _ = server.prepare_download(
+            {"url": "u", "sub_mode": "interpretive-dance", "sub_lang": "en"},
+            ffmpeg="/x/ffmpeg")
+        self.assertEqual(job.sub_mode, "none")
+
+    def test_audio_downloads_never_carry_a_subtitle_mode(self):
+        job, _ = server.prepare_download(
+            {"url": "u", "mode": "audio", "sub_mode": "burn", "sub_lang": "en"},
+            ffmpeg="/x/ffmpeg")
+        self.assertEqual(job.sub_mode, "none")
+
+
+class TestBurnTargets(unittest.TestCase):
+    def test_names_the_burned_copy_distinctly_beside_the_original(self):
+        self.assertEqual(
+            server.burned_path("/out/Some Clip.mp4"), "/out/Some Clip [subbed].mp4")
+
+    def test_finds_the_subtitle_written_next_to_a_download(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as folder:
+            Path(folder, "Clip.mp4").write_bytes(b"v")
+            Path(folder, "Clip.ja.srt").write_text("1\n", encoding="utf-8")
+            self.assertEqual(server.subtitle_beside(str(Path(folder, "Clip.mp4")), "ja"),
+                             str(Path(folder, "Clip.ja.srt")))
+
+    def test_returns_nothing_when_no_subtitle_was_written(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as folder:
+            Path(folder, "Clip.mp4").write_bytes(b"v")
+            self.assertIsNone(server.subtitle_beside(str(Path(folder, "Clip.mp4")), "ja"))
+
+
+class TestSidecarRepair(unittest.TestCase):
+    """Repair runs on every downloaded subtitle that looks like rolling ASR,
+    keeping the untouched original alongside."""
+
+    def setUp(self):
+        import tempfile
+        self.folder = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.folder.cleanup()
+
+    def write(self, name, text):
+        from pathlib import Path
+        path = Path(self.folder.name, name)
+        path.write_text(text, encoding="utf-8")
+        return str(path)
+
+    def test_repairs_a_rolling_file_and_keeps_the_original(self):
+        import fixtures
+        from pathlib import Path
+        lines = [f"line number {n}" for n in range(10)]
+        path = self.write("Clip.en.srt", fixtures.rolling(lines))
+        stats = server.repair_sidecar(path)
+
+        self.assertTrue(stats["rolling"])
+        self.assertTrue(Path(self.folder.name, "Clip.en.raw.srt").exists())
+        import subs
+        repaired = subs.parse(Path(path).read_text(encoding="utf-8"))
+        self.assertEqual([c.lines[0] for c in repaired], lines)
+
+    def test_leaves_authored_captions_completely_alone(self):
+        import fixtures
+        from pathlib import Path
+        original = fixtures.authored([f"line {n}" for n in range(10)])
+        path = self.write("Clip.en.srt", original)
+        stats = server.repair_sidecar(path)
+
+        self.assertFalse(stats["rolling"])
+        self.assertFalse(Path(self.folder.name, "Clip.en.raw.srt").exists())
+        self.assertEqual(Path(path).read_text(encoding="utf-8"), original)
+
+    def test_converts_a_vtt_sidecar_to_srt(self):
+        from pathlib import Path
+        import fixtures
+        lines = [f"line {n}" for n in range(10)]
+        path = self.write("Clip.en.vtt",
+                          "WEBVTT\n\n" + fixtures.rolling(lines))
+        result = server.repair_sidecar(path)
+        self.assertTrue(Path(self.folder.name, "Clip.en.srt").exists())
+        self.assertEqual(result["path"], str(Path(self.folder.name, "Clip.en.srt")))

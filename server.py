@@ -15,6 +15,7 @@ from urllib.parse import urlparse, parse_qs
 
 import jobs
 import media
+import subs
 import ytdlp
 
 PORT = 8642
@@ -27,10 +28,62 @@ if not os.path.isdir(os.path.dirname(OUTPUT_DIR)):
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 FFMPEG = media.find_ffmpeg()
+FFPROBE = media.ffprobe_for(FFMPEG)
+CAN_BURN = media.can_burn(FFMPEG)
+
+SUB_MODES = ("none", "sidecar", "soft", "burn")
+NEEDS_FFMPEG_FULL = (
+    "Burning subtitles needs an ffmpeg built with libass, which Homebrew's "
+    "standard formula no longer includes. Install it with: "
+    "brew install ffmpeg-full"
+)
+
+
+def burned_path(video):
+    """Where the burned copy goes: beside the original, clearly marked."""
+    stem, extension = os.path.splitext(video)
+    return f"{stem} [subbed]{extension or '.mp4'}"
+
+
+def subtitle_beside(video, language):
+    """The subtitle file yt-dlp wrote next to `video`, if any."""
+    stem = os.path.splitext(video)[0]
+    for suffix in (f".{language}.srt", f".{language}.vtt", ".srt", ".vtt"):
+        candidate = stem + suffix
+        if os.path.isfile(candidate):
+            return candidate
+    return None
 
 def _run(job):
-    """Queue worker body: build nothing, just run what was prepared."""
+    """Queue worker body: download, then any subtitle post-processing."""
     jobs.run_download(job, job.command, ffmpeg=bool(FFMPEG))
+    if job.status != "done" or not job.sub_lang or not job.filename:
+        return
+
+    video = os.path.join(OUTPUT_DIR, job.filename)
+    subtitle = subtitle_beside(video, job.sub_lang)
+    if not subtitle:
+        job.note("(no subtitle track was available for this video)")
+        return
+
+    try:
+        stats = repair_sidecar(subtitle)
+        subtitle = stats["path"]
+        job.subtitle_stats = stats
+        if stats["rolling"]:
+            job.note(f"(repaired auto-generated captions: "
+                     f"{stats['cues_in']} -> {stats['cues_out']} cues)")
+    except OSError as error:
+        job.note(f"(could not repair captions: {error})")
+
+    if job.sub_mode == "soft":
+        jobs.run_mux(job, ffmpeg=FFMPEG, video=video, subtitle=subtitle,
+                     output=burned_path(video), language=job.sub_lang)
+    elif job.sub_mode == "burn":
+        jobs.run_burn(job, ffmpeg=FFMPEG, video=video, subtitle=subtitle,
+                      output=burned_path(video), language=job.sub_lang,
+                      size=job.sub_size,
+                      duration_ms=media.probe_duration(FFPROBE, video))
 
 
 QUEUE = jobs.JobQueue(runner=_run).start()
@@ -42,7 +95,37 @@ STATIC = {
 }
 
 
-def prepare_download(payload, ffmpeg=None, output_dir=None):
+def repair_sidecar(path, glossary=()):
+    """Repair a downloaded subtitle in place, keeping the original alongside.
+
+    Rolling ASR captions write every line three times, which reads as the
+    previous subtitle lingering over the current audio. Authored captions score
+    below the detection thresholds and are left exactly as they were -- and
+    since nothing is deleted, the untouched original stays available as
+    `.raw.srt` whenever a repair did happen.
+    """
+    stem, extension = os.path.splitext(path)
+    destination = stem + ".srt"
+
+    with open(path, encoding="utf-8-sig") as handle:
+        _, stats = subs.process(handle.read(), glossary)
+
+    if not stats["rolling"] and extension.lower() == ".srt":
+        stats["path"] = path
+        return stats
+
+    if extension.lower() == ".srt":
+        os.replace(path, stem + ".raw.srt")
+        source = stem + ".raw.srt"
+    else:
+        source = path
+
+    subs.repair_file(source, destination, glossary)
+    stats["path"] = destination
+    return stats
+
+
+def prepare_download(payload, ffmpeg=None, output_dir=None, can_burn=None):
     """Validate a download request into a Job and its yt-dlp argv.
 
     Pure: builds and returns, runs nothing. `ffmpeg` is a path or None -- never
@@ -55,15 +138,25 @@ def prepare_download(payload, ffmpeg=None, output_dir=None):
     if quality not in ytdlp.VALID_QUALITIES:
         quality = ytdlp.DEFAULT_QUALITY
 
+    if can_burn is None:
+        can_burn = CAN_BURN
+
     sub_lang = payload.get("sub_lang") or None
+    sub_mode = payload.get("sub_mode") or "none"
+    if sub_mode not in SUB_MODES or not sub_lang:
+        sub_mode = "none"
     if mode == "audio":
-        sub_lang = None
+        sub_lang, sub_mode = None, "none"
+    if sub_mode == "burn" and not can_burn:
+        raise ValueError(NEEDS_FFMPEG_FULL)
+
+    sub_size = payload.get("sub_size") or "medium"
 
     job = jobs.Job(url=payload["url"].strip(), mode=mode, quality=quality,
-                   sub_lang=sub_lang)
+                   sub_lang=sub_lang, sub_mode=sub_mode, sub_size=sub_size)
     command = ytdlp.build_download_command(
         url=job.url, output_dir=output_dir, mode=mode, quality=quality,
-        sub_lang=sub_lang, ffmpeg=ffmpeg)
+        sub_lang=sub_lang if sub_mode != "none" else None, ffmpeg=ffmpeg)
     return job, command
 
 
@@ -140,6 +233,8 @@ class Handler(BaseHTTPRequestHandler):
                 "output_dir": OUTPUT_DIR,
                 "ffmpeg_available": bool(FFMPEG),
                 "ffmpeg_path": FFMPEG,
+                "can_burn": CAN_BURN,
+                "sub_sizes": list(media.SIZES),
                 "default_quality": ytdlp.DEFAULT_QUALITY,
             })
             return

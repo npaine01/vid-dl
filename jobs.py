@@ -27,13 +27,16 @@ NO_FFMPEG_FOR_MP3 = (
 
 class Job:
     def __init__(self, url, mode="video", quality=ytdlp.DEFAULT_QUALITY,
-                 sub_lang=None, title=None):
+                 sub_lang=None, title=None, sub_mode="none", sub_size="medium"):
         self.id = uuid.uuid4().hex[:12]
         self.url = url
         self.mode = mode
         self.quality = quality
         self.sub_lang = sub_lang
+        self.sub_mode = sub_mode
+        self.sub_size = sub_size
         self.title = title
+        self.subtitle_stats = None
         self.status = "queued"
         self.cancelled = False
         self.process = None
@@ -50,9 +53,11 @@ class Job:
         return {
             "id": self.id, "url": self.url, "mode": self.mode,
             "quality": self.quality, "sub_lang": self.sub_lang,
+            "sub_mode": self.sub_mode, "sub_size": self.sub_size,
             "title": self.title, "status": self.status, "stage": self.stage,
             "percent": self.percent, "size": self.size,
             "filename": self.filename, "error": self.error, "log": self.log,
+            "subtitle_stats": self.subtitle_stats,
         }
 
     def note(self, line):
@@ -261,7 +266,11 @@ def run_burn(job, ffmpeg, video, subtitle, output, language=None,
     workspace = tempfile.mkdtemp(prefix="vid-dl-burn-")
     try:
         staged = os.path.join(workspace, STAGED_SUBTITLE)
-        job.subtitle_stats = subs.repair_file(subtitle, staged, glossary)
+        staged_stats = subs.repair_file(subtitle, staged, glossary)
+        # The sidecar may already have been repaired before we got here; those
+        # stats describe what actually changed, so they win.
+        if job.subtitle_stats is None:
+            job.subtitle_stats = staged_stats
 
         command = media.burn_command(
             ffmpeg=ffmpeg, video=video, subtitle=STAGED_SUBTITLE, output=output,
@@ -302,3 +311,31 @@ def run_burn(job, ffmpeg, video, subtitle, output, language=None,
         job.stage = None
         job.process = None
         shutil.rmtree(workspace, ignore_errors=True)
+
+
+def run_mux(job, ffmpeg, video, subtitle, output, language=None, spawn=_spawn):
+    """Embed `subtitle` as a switchable track. No re-encode, so near-instant."""
+    job.status = "running"
+    job.stage = "embedding"
+    try:
+        process = spawn(media.mux_command(
+            ffmpeg=ffmpeg, video=video, subtitle=subtitle,
+            output=output, language=language))
+        job.process = process
+        for line in process.stdout:
+            line = line.rstrip("\n")
+            if line:
+                job.note(line)
+        if process.wait() == 0:
+            job.status = "done"
+            job.percent = 100
+            job.filename = os.path.basename(output)
+        else:
+            job.status = "error"
+            job.error = "ffmpeg could not embed the subtitles. See log for details."
+    except Exception as error:  # noqa: BLE001
+        job.status = "error"
+        job.error = str(error)
+    finally:
+        job.stage = None
+        job.process = None

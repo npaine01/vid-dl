@@ -1,8 +1,13 @@
 let mode = "video";
 
 const qualitySelect = document.getElementById("quality");
-const subsCheckbox = document.getElementById("subs");
-const subsRow = document.getElementById("subsRow");
+const subMode = document.getElementById("subMode");
+const subLang = document.getElementById("subLang");
+const subSize = document.getElementById("subSize");
+const subOptions = document.getElementById("subOptions");
+const sizeField = document.getElementById("sizeField");
+const subNote = document.getElementById("subNote");
+let canBurn = true;
 const queueBlock = document.getElementById("queueBlock");
 const queueList = document.getElementById("queueList");
 const queueCount = document.getElementById("queueCount");
@@ -14,14 +19,49 @@ document.querySelectorAll(".fmt-btn").forEach(btn => {
     btn.classList.add("active");
     mode = btn.dataset.mode;
     qualitySelect.disabled = (mode === "audio");
-    subsCheckbox.disabled = (mode === "audio");
-    subsRow.classList.toggle("disabled", mode === "audio");
+    subMode.disabled = (mode === "audio");
+    updateSubtitleOptions();
   });
 });
+
+const NOTES = {
+  none: "",
+  sidecar: "Saved as a .srt beside the video. Auto-generated captions are " +
+           "repaired automatically; the original is kept as .raw.srt.",
+  soft: "Embedded as a track your player can switch on or off. Instant — " +
+        "the video is not re-encoded.",
+  burn: "Painted permanently into the picture, visible in any player. " +
+        "This re-encodes the video, so it takes a few minutes per item."
+};
+
+function updateSubtitleOptions() {
+  const chosen = mode === "audio" ? "none" : subMode.value;
+  subOptions.style.display = chosen === "none" ? "none" : "flex";
+  sizeField.style.display = chosen === "burn" ? "block" : "none";
+  subNote.textContent = mode === "audio" ? "" : (NOTES[chosen] || "");
+  subNote.classList.remove("warn-text");
+
+  if (!canBurn) {
+    const burnOption = subMode.querySelector('option[value="burn"]');
+    burnOption.disabled = true;
+    burnOption.textContent = "Burn permanently into the picture (needs ffmpeg-full)";
+    if (chosen === "burn") subMode.value = "none";
+  }
+}
+
+subMode.addEventListener("change", updateSubtitleOptions);
 
 fetch("/api/info").then(r => r.json()).then(info => {
   document.getElementById("saveLoc").textContent = "Saving to " + info.output_dir;
   if (info.default_quality) qualitySelect.value = info.default_quality;
+  canBurn = info.can_burn;
+  updateSubtitleOptions();
+  if (info.ffmpeg_available && !info.can_burn) {
+    subNote.classList.add("warn-text");
+    subNote.innerHTML = "Burning is unavailable: this ffmpeg was built without " +
+      "libass. Install <code>brew install ffmpeg-full</code> to enable it. " +
+      "Everything else works.";
+  }
   if (!info.ffmpeg_available) {
     const w = document.getElementById("ffmpegWarn");
     w.style.display = "block";
@@ -52,10 +92,16 @@ function addToQueue() {
     body: JSON.stringify({
       url, mode,
       quality: qualitySelect.value,
-      sub_lang: (mode === "video" && subsCheckbox.checked) ? "en" : null
+      sub_mode: mode === "video" ? subMode.value : "none",
+      sub_lang: (mode === "video" && subMode.value !== "none") ? subLang.value : null,
+      sub_size: subSize.value
     })
   }).then(r => r.json()).then(data => {
-    if (data.error) return;
+    if (data.error) {
+      subNote.classList.add("warn-text");
+      subNote.textContent = data.error;
+      return;
+    }
     urlInput.value = "";
     refresh();
   }).catch(() => {});
@@ -76,8 +122,9 @@ const LABELS = {
 
 function describe(job) {
   if (job.status === "running") {
-    return (job.stage === "downloading" ? "Downloading " : "Working ") +
-           Math.round(job.percent) + "%";
+    const STAGES = { downloading: "Downloading", burning: "Burning subtitles",
+                     embedding: "Embedding subtitles" };
+    return (STAGES[job.stage] || "Working") + " " + Math.round(job.percent) + "%";
   }
   return LABELS[job.status] || job.status;
 }
@@ -128,6 +175,9 @@ function render(report) {
 
     const meta = [];
     if (job.size) meta.push("Total size: " + job.size);
+    if (job.subtitle_stats && job.subtitle_stats.rolling) {
+      meta.push(`Captions repaired: ${job.subtitle_stats.cues_in} → ${job.subtitle_stats.cues_out} cues`);
+    }
     if (job.error) meta.push(`<span class="err">${job.error}</span>`);
     if (meta.length) {
       const line = document.createElement("div");

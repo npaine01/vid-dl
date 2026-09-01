@@ -206,3 +206,22 @@ pre.log {
   padding: 8px; font-size: 10px; color: var(--muted); max-height: 120px;
   overflow-y: auto; margin-top: 8px; white-space: pre-wrap; word-break: break-all;
 }
+
+/* --- subtitle options --- */
+#subsSection { margin-bottom: 18px; }
+#subMode, .sub-field select {
+  width: 100%; padding: 12px 14px; border-radius: 10px;
+  border: 1px solid var(--border); background: #0d0f14; color: var(--text);
+  font-size: 14px; margin: 6px 0 0; appearance: none; -webkit-appearance: none;
+}
+#subMode:focus, .sub-field select:focus { outline: none; border-color: var(--accent2); }
+#subMode:disabled, .sub-field select:disabled { color: var(--muted); opacity: .6; cursor: not-allowed; }
+#subMode option:disabled { color: #5a5f6b; }
+.sub-options { display: flex; gap: 12px; margin-top: 12px; }
+.sub-field { flex: 1; }
+.sub-field label {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted);
+}
+.sub-note { font-size: 12px; color: var(--muted); margin: 8px 0 0; line-height: 1.45; }
+.sub-note code { background: rgba(0,0,0,0.3); padding: 1px 5px; border-radius: 4px; font-size: 11px; }
+.sub-note.warn-text { color: #ffd43b; }

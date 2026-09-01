@@ -29,9 +29,38 @@
       <option value="480">480p (SD)</option>
     </select>
 
-    <div class="checkbox-row" id="subsRow">
-      <input type="checkbox" id="subs" checked>
-      <label for="subs">Download English subtitles (.srt) if available</label>
+    <div id="subsSection">
+      <label for="subMode">Subtitles</label>
+      <select id="subMode">
+        <option value="none" selected>None</option>
+        <option value="sidecar">Download as a separate .srt file</option>
+        <option value="soft">Embed as a track you can switch off</option>
+        <option value="burn">Burn permanently into the picture</option>
+      </select>
+
+      <div class="sub-options" id="subOptions" style="display:none;">
+        <div class="sub-field">
+          <label for="subLang">Language</label>
+          <select id="subLang">
+            <option value="en" selected>English</option>
+            <option value="ja">日本語 (Japanese)</option>
+            <option value="zh-Hans">中文简体 (Simplified Chinese)</option>
+            <option value="zh-Hant">中文繁體 (Traditional Chinese)</option>
+            <option value="it">Italiano (Italian)</option>
+            <option value="es">Español (Spanish)</option>
+            <option value="ko">한국어 (Korean)</option>
+          </select>
+        </div>
+        <div class="sub-field" id="sizeField" style="display:none;">
+          <label for="subSize">Text size</label>
+          <select id="subSize">
+            <option value="small">Small</option>
+            <option value="medium" selected>Medium</option>
+            <option value="large">Large</option>
+          </select>
+        </div>
+      </div>
+      <p class="sub-note" id="subNote"></p>
     </div>
 
     <button class="go" id="goBtn">Add to queue</button>
