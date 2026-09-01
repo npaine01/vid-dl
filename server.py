@@ -38,9 +38,15 @@ STATIC = {
 }
 
 
-def start_job(payload):
-    """Validate a download request and start it. Returns the new job."""
+def prepare_download(payload, ffmpeg=None, output_dir=None):
+    """Validate a download request into a Job and its yt-dlp argv.
+
+    Pure: builds and returns, runs nothing. `ffmpeg` is a path or None -- never
+    a boolean, since it is passed straight through to --ffmpeg-location.
+    """
+    output_dir = output_dir or OUTPUT_DIR
     mode = payload.get("mode") if payload.get("mode") in ("video", "audio") else "video"
+
     quality = payload.get("quality")
     if quality not in ytdlp.VALID_QUALITIES:
         quality = ytdlp.DEFAULT_QUALITY
@@ -52,10 +58,16 @@ def start_job(payload):
     job = jobs.Job(url=payload["url"].strip(), mode=mode, quality=quality,
                    sub_lang=sub_lang)
     command = ytdlp.build_download_command(
-        url=job.url, output_dir=OUTPUT_DIR, mode=mode, quality=quality,
-        sub_lang=sub_lang, ffmpeg=bool(FFMPEG))
+        url=job.url, output_dir=output_dir, mode=mode, quality=quality,
+        sub_lang=sub_lang, ffmpeg=ffmpeg)
+    return job, command
 
-    if sub_lang and not FFMPEG:
+
+def start_job(payload):
+    """Validate a download request and start it. Returns the new job."""
+    job, command = prepare_download(payload, ffmpeg=FFMPEG)
+
+    if job.sub_lang and not FFMPEG:
         job.note("(ffmpeg not found - subtitles will be saved as .vtt instead "
                  "of .srt. Install ffmpeg for automatic conversion.)")
 

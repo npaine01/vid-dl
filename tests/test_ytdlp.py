@@ -8,12 +8,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import ytdlp
 
 OUT = "/tmp/out"
+FFMPEG = "/opt/ffmpeg-full/bin/ffmpeg"
 
 
 class TestDownloadCommand(unittest.TestCase):
     def build(self, **kwargs):
         kwargs.setdefault("url", "https://example.com/watch?v=x")
         kwargs.setdefault("output_dir", OUT)
+        kwargs.setdefault("ffmpeg", FFMPEG)
         return ytdlp.build_download_command(**kwargs)
 
     def test_downloads_a_single_video_not_the_playlist_it_belongs_to(self):
@@ -25,19 +27,19 @@ class TestDownloadCommand(unittest.TestCase):
                          os.path.join(OUT, "%(title)s.%(ext)s"))
 
     def test_caps_video_height_at_the_requested_quality(self):
-        command = self.build(quality="720", ffmpeg=True)
+        command = self.build(quality="720", ffmpeg=FFMPEG)
         self.assertIn("bestvideo[height<=720]+bestaudio/best[height<=720]",
                       command)
 
     def test_does_not_cap_height_when_asked_for_best(self):
-        self.assertIn("bv*+ba/b", self.build(quality="best", ffmpeg=True))
+        self.assertIn("bv*+ba/b", self.build(quality="best", ffmpeg=FFMPEG))
 
     def test_falls_back_to_premerged_formats_without_ffmpeg(self):
         self.assertIn("best[height<=1080]/b",
-                      self.build(quality="1080", ffmpeg=False))
+                      self.build(quality="1080", ffmpeg=None))
 
     def test_rejects_an_unknown_quality_and_uses_the_default(self):
-        command = self.build(quality="9000", ffmpeg=True)
+        command = self.build(quality="9000", ffmpeg=FFMPEG)
         self.assertIn(f"bestvideo[height<={ytdlp.DEFAULT_QUALITY}]"
                       f"+bestaudio/best[height<={ytdlp.DEFAULT_QUALITY}]", command)
 
@@ -61,14 +63,30 @@ class TestDownloadCommand(unittest.TestCase):
         self.assertIn("--write-auto-subs", command)
 
     def test_converts_subtitles_to_srt_when_ffmpeg_is_present(self):
-        command = self.build(sub_lang="en", ffmpeg=True)
+        command = self.build(sub_lang="en", ffmpeg=FFMPEG)
         self.assertEqual(command[command.index("--convert-subs") + 1], "srt")
 
     def test_leaves_subtitles_as_downloaded_without_ffmpeg(self):
-        self.assertNotIn("--convert-subs", self.build(sub_lang="en", ffmpeg=False))
+        self.assertNotIn("--convert-subs", self.build(sub_lang="en", ffmpeg=None))
 
     def test_ignores_subtitles_in_audio_mode(self):
         self.assertNotIn("--write-subs", self.build(mode="audio", sub_lang="en"))
+
+
+class TestFfmpegLocation(unittest.TestCase):
+    """yt-dlp searches PATH for ffmpeg on its own. Homebrew's ffmpeg-full is
+    keg-only and never on PATH, so the location has to be passed explicitly or
+    every merge, MP3 extraction and subtitle conversion fails."""
+
+    def test_tells_ytdlp_where_ffmpeg_is(self):
+        command = ytdlp.build_download_command(
+            url="u", output_dir=OUT, ffmpeg=FFMPEG)
+        self.assertEqual(command[command.index("--ffmpeg-location") + 1], FFMPEG)
+
+    def test_omits_the_location_when_there_is_no_ffmpeg(self):
+        command = ytdlp.build_download_command(
+            url="u", output_dir=OUT, ffmpeg=None)
+        self.assertNotIn("--ffmpeg-location", command)
 
 
 class TestProgressParsing(unittest.TestCase):

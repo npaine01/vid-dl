@@ -32,12 +32,20 @@ def video_format(quality, ffmpeg):
 
 
 def build_download_command(url, output_dir, mode="video",
-                           quality=DEFAULT_QUALITY, sub_lang=None, ffmpeg=True):
-    """Build the yt-dlp argv for one download."""
+                           quality=DEFAULT_QUALITY, sub_lang=None, ffmpeg=None):
+    """Build the yt-dlp argv for one download.
+
+    `ffmpeg` is the path to a working ffmpeg, or None. yt-dlp searches PATH on
+    its own, which is not good enough: Homebrew's ffmpeg-full is keg-only and
+    never on PATH, and a stale formula left on PATH may not run at all. So the
+    location is always passed explicitly when we have one.
+    """
     if quality not in VALID_QUALITIES:
         quality = DEFAULT_QUALITY
 
     command = [sys.executable, "-m", "yt_dlp", "--newline", "--no-playlist"]
+    if ffmpeg:
+        command += ["--ffmpeg-location", ffmpeg]
 
     if mode == "audio":
         command += ["-x", "--audio-format", "mp3"]
