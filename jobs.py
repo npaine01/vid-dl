@@ -12,7 +12,7 @@ LOG_LINES = 80
 
 NO_YTDLP = "yt-dlp isn't installed. Re-run the launcher to install it."
 NO_FFMPEG_FOR_MP3 = (
-    "MP3 extraction needs ffmpeg, which isn't installed. "
+    "MP3 extraction needs ffmpeg, and no working copy was found. "
     "Install it with: brew install ffmpeg (then try again)."
 )
 

@@ -165,8 +165,10 @@ def main():
     print(f"vid-dl running at {url}")
     print(f"Saving downloads to: {OUTPUT_DIR}")
     if not FFMPEG:
-        print("NOTE: ffmpeg not found - video quality will be limited and MP3 "
-              "extraction will not work. Install with: brew install ffmpeg")
+        print("NOTE: no working ffmpeg found - video quality will be limited "
+              "and MP3 extraction will not work.")
+        print("      brew install ffmpeg        (downloads, MP3, merging)")
+        print("      brew install ffmpeg-full   (also burns subtitles into video)")
     threading.Timer(0.6, lambda: webbrowser.open(url)).start()
     try:
         server.serve_forever()

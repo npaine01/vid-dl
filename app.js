@@ -23,10 +23,10 @@ fetch("/api/info").then(r => r.json()).then(info => {
   if (!info.ffmpeg_available) {
     const w = document.getElementById("ffmpegWarn");
     w.style.display = "block";
-    w.innerHTML = "ffmpeg isn't installed — video quality will be limited and MP3 downloads won't work.<br>" +
-      "Install it in Terminal with <code>brew install ffmpeg</code> (get Homebrew first at " +
-      '<a href="https://brew.sh" target="_blank" style="color:inherit;">brew.sh</a> if needed) — ' +
-      "no manual file placement needed, it goes on your PATH automatically.";
+    w.innerHTML = "No working ffmpeg found — video quality will be limited and MP3 downloads won't work.<br>" +
+      "In Terminal: <code>brew install ffmpeg</code> for downloads and MP3, or " +
+      "<code>brew install ffmpeg-full</code> to also burn subtitles into video " +
+      '(get Homebrew first at <a href="https://brew.sh" target="_blank" style="color:inherit;">brew.sh</a> if needed).';
   }
 }).catch(() => {});
 

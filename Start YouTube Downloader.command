@@ -39,23 +39,21 @@ else
   fi
 fi
 
-# --- Check for ffmpeg (needed for best-quality MP4 merging and all MP3 downloads) ---
-if ! command -v ffmpeg >/dev/null 2>&1; then
+# --- Check for ffmpeg (needed for MP4 merging, MP3, and subtitle burn-in) ---
+# Uses the app's own detection: Homebrew's ffmpeg-full is keg-only, so it is
+# never on PATH and `command -v ffmpeg` would miss a perfectly good install.
+if ! python3 -c "import sys, media; sys.exit(0 if media.find_ffmpeg() else 1)" 2>/dev/null; then
   echo ""
-  echo "NOTE: ffmpeg isn't installed."
+  echo "NOTE: no working ffmpeg found."
   echo "  Without it: video downloads are capped at lower pre-merged quality,"
   echo "  and MP3 (audio-only) downloads won't work at all."
   echo ""
-  echo "  You don't need to 'place' ffmpeg anywhere by hand - installing it with"
-  echo "  Homebrew puts it on your PATH automatically. To install:"
-  echo "    1. If you don't have Homebrew yet, install it from https://brew.sh"
-  echo "       (run the command shown on that page in Terminal)"
-  echo "    2. Then run:  brew install ffmpeg"
-  echo "  That's it - no downloads to move, no folders to configure."
+  echo "  If you don't have Homebrew yet, install it from https://brew.sh first."
+  echo "  Then pick one:"
+  echo "    brew install ffmpeg        # downloads, MP3, merging"
+  echo "    brew install ffmpeg-full   # the above, plus burning subtitles into video"
   echo ""
-  echo "  (Alternative without Homebrew: download a static build from"
-  echo "   https://evermeet.cx/ffmpeg/ and move the 'ffmpeg' binary into"
-  echo "   /usr/local/bin so it's on your PATH.)"
+  echo "  Nothing to place by hand - Homebrew handles it."
   echo ""
 fi
 
